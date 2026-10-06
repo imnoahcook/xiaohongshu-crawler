@@ -108,7 +108,7 @@ _SEARCH_DELAY = (10.0, 20.0)
 # blocks search for a while after a burst of queries; pushing on only extends it.
 _SEARCH_BACKOFF = 300
 _MAX_CONSECUTIVE_SEARCH_FAILURES = 3
-_NOTE_DELAY = (4.0, 8.0)
+_NOTE_DELAY = (3.0, 6.0)
 _MAX_SCROLL_ROUNDS = 8
 _MAX_CONSECUTIVE_FAILURES = 4
 _NOTE_READY_SECONDS = 15
@@ -383,7 +383,9 @@ class ExportJob:
 
         # Slides first: the page requests its comments a few seconds after it loads
         images = await self._download_images(page, note_id, note.get("imageList") or [])
-        top_comments = await self._collect_comments(page, comment_pages[note_id])
+        # No point waiting for the comment request of a note the search says has none
+        has_comments = hit.get("comments", 1) > 0 and self.max_comments > 0
+        top_comments = await self._collect_comments(page, comment_pages[note_id]) if has_comments else []
         interact = note.get("interactInfo") or {}
         translation = note.get("noteTranslation") or {}
         user = note.get("user") or {}
