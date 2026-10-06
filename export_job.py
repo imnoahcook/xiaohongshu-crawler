@@ -108,7 +108,7 @@ _SEARCH_DELAY = (10.0, 20.0)
 # blocks search for a while after a burst of queries; pushing on only extends it.
 _SEARCH_BACKOFF = 300
 _MAX_CONSECUTIVE_SEARCH_FAILURES = 3
-_NOTE_DELAY = (3.0, 6.0)
+_NOTE_DELAY = (6.0, 12.0)
 _MAX_SCROLL_ROUNDS = 8
 _MAX_CONSECUTIVE_FAILURES = 4
 _NOTE_READY_SECONDS = 15
@@ -296,7 +296,15 @@ class ExportJob:
     def _fetched_ids(self) -> set[str]:
         if not self.notes_path.exists():
             return set()
-        return {json.loads(line)["note_id"] for line in self.notes_path.read_text().splitlines() if line.strip()}
+        fetched = set()
+        # Split on "\n" only: captions can contain other Unicode line separators
+        for line in self.notes_path.read_text().split("\n"):
+            try:
+                fetched.add(json.loads(line)["note_id"])
+            except (json.JSONDecodeError, KeyError):
+                # A line cut off when an earlier run was stopped mid-write; that note is fetched again
+                continue
+        return fetched
 
     def _pending_notes(self) -> list[str]:
         """Notes hit by this phase's queries and not fetched yet, most saved first."""
