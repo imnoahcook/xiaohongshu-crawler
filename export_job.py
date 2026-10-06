@@ -28,6 +28,11 @@ Plan file (JSON):
       "min_collected": 0,
       "interleave": false,
       "workers": 1,
+      "note_delay": [6, 12],
+      "max_failures": 4,
+      "search_delay": [10, 20],
+      "fetch_notes": true,
+      "note_order": "saves",
       "categories": [{"category": "Food", "phase": 1, "queries": ["..."]}]
     }
 
@@ -141,6 +146,16 @@ class ExportJob:
         self.interleave: bool = plan.get("interleave", False)
         # Number of tabs fetching notes at the same time
         self.workers: int = plan.get("workers", 1)
+        # Pause between notes (seconds, min and max) and how many failures in a row end the run
+        self.note_delay: tuple[float, float] = tuple(plan.get("note_delay", _NOTE_DELAY))
+        self.max_failures: int = plan.get("max_failures", _MAX_CONSECUTIVE_FAILURES)
+        # Pause between searches (seconds, min and max)
+        self.search_delay: tuple[float, float] = tuple(plan.get("search_delay", _SEARCH_DELAY))
+        # False runs the searches only: search_index.json is filled but no note pages are opened
+        self.fetch_notes: bool = plan.get("fetch_notes", True)
+        # "saves": most-saved notes first. "breadth": every query's top result first, then
+        # every query's second result, and so on, so coverage is even if the run stops early
+        self.note_order: str = plan.get("note_order", "saves")
 
         self.queries_path = out_dir / "queries.json"
         self.index_path = out_dir / "search_index.json"
@@ -286,7 +301,7 @@ class ExportJob:
                 await asyncio.sleep(_SEARCH_BACKOFF)
             else:
                 failures = 0
-                await asyncio.sleep(random.uniform(*_SEARCH_DELAY))
+                await asyncio.sleep(random.uniform(*self.search_delay))
                 if after_each is not None and await after_each() is False:
                     logger.error("Note fetching stopped; leaving the remaining searches for a rerun")
                     return False
@@ -318,7 +333,12 @@ class ExportJob:
             and hit.get("collected", 0) >= self.min_collected
             and any(h["query"] in phase_queries for h in hit["hits"])
         ]
-        return sorted(pending, key=lambda note_id: self.index[note_id].get("collected", 0), reverse=True)
+        def saves(note_id: str) -> int:
+            return self.index[note_id].get("collected", 0)
+
+        if self.note_order == "breadth":
+            return sorted(pending, key=lambda n: (min(h["rank"] for h in self.index[n]["hits"]), -saves(n)))
+        return sorted(pending, key=saves, reverse=True)
 
     async def _download_image(self, page: Page, folder: Path, number: int, image: dict) -> str | None:
         url = (image.get("urlDefault") or "").replace("http://", "https://")
@@ -457,7 +477,7 @@ class ExportJob:
 
                 if record is None:
                     state["failures"] += 1
-                    if state["failures"] >= _MAX_CONSECUTIVE_FAILURES:
+                    if state["failures"] >= self.max_failures:
                         logger.error(
                             "%d notes in a row failed; stopping to keep the account safe", state["failures"]
                         )
@@ -471,7 +491,7 @@ class ExportJob:
                         number, total, record["title"][:30], record["collected"],
                         len(record["images"]), len(record["top_comments"]),
                     )
-                await asyncio.sleep(random.uniform(*_NOTE_DELAY))
+                await asyncio.sleep(random.uniform(*self.note_delay))
 
         try:
             await asyncio.gather(*(worker(tab) for tab in pages))
@@ -499,6 +519,8 @@ class ExportJob:
         page = await bm.new_page()
         page.on("response", self._on_response)
         try:
+            if not self.fetch_notes:
+                return await self.run_searches(page)
             if self.interleave:
                 state = {"ok": True}
 
