@@ -1,16 +1,16 @@
 """
-数据解析模块
+Data parsing module
 
-职责：
-  - 将 Playwright DOM 元素转换为结构化 Python 数据
-  - 处理数字格式转换（"1.2万" → 12000）
-  - 统一处理缺失字段的默认值
-  - 清洗文本（去除多余空白）
+Responsibilities:
+  - Convert Playwright DOM elements into structured Python data
+  - Normalize count formats ("1.2万" → 12000; rednote renders Chinese units even on the English UI)
+  - Apply consistent defaults for missing fields
+  - Clean text (strip extra whitespace)
 
-覆盖范围：
-  - 搜索结果卡片解析（Phase 2）
-  - 笔记详情页解析（Phase 3）
-  - 评论区解析（Phase 3）
+Scope:
+  - Search result card parsing (Phase 2)
+  - Note detail page parsing (Phase 3)
+  - Comment section parsing (Phase 3)
 """
 
 from __future__ import annotations
@@ -22,33 +22,38 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from playwright.async_api import ElementHandle, Page
 
+from src.site import BASE_URL
+
 logger = logging.getLogger(__name__)
 
-# 小红书笔记详情页前缀
-_NOTE_BASE_URL = "https://www.xiaohongshu.com"
+# URL prefix for rednote note detail pages
+_NOTE_BASE_URL = BASE_URL
 
 
 def normalize_count(text: str) -> int:
-    """将中文数字文本转换为整数。
+    """Convert count text to an integer.
 
-    支持格式：
+    rednote renders counts with Chinese units ("万" = 10,000, "亿" = 100,000,000)
+    even on the English UI, so those literals are matched here.
+
+    Supported formats:
       - "1.2万" → 12000
       - "3.5w" → 35000
       - "324" → 324
       - "" / None → 0
 
     Args:
-        text: 原始文本字符串
+        text: Raw text string
 
     Returns:
-        整数值，解析失败返回 0
+        The integer value, or 0 if parsing fails
     """
     if not text:
         return 0
 
-    text = text.strip().replace(",", "")
+    text = text.strip().replace(",", "").rstrip("+")
 
-    # 匹配 "1.2万" 或 "1.2w"（大小写不敏感）
+    # Match "1.2万" or "1.2w" (case-insensitive); 万/w is the site's unit for 10,000
     match = re.match(r"^([\d.]+)\s*[万wW]$", text)
     if match:
         try:
@@ -56,7 +61,24 @@ def normalize_count(text: str) -> int:
         except ValueError:
             return 0
 
-    # 纯数字
+    # English suffixes used on rednote.com: "1.2K" / "3.4M" / "1B"
+    match = re.match(r"^([\d.]+)\s*([kKmMbB])$", text)
+    if match:
+        multiplier = {"k": 1_000, "m": 1_000_000, "b": 1_000_000_000}[match.group(2).lower()]
+        try:
+            return int(float(match.group(1)) * multiplier)
+        except ValueError:
+            return 0
+
+    # "1.2亿" → 120000000 (亿 is the site's unit for 100,000,000)
+    match = re.match(r"^([\d.]+)\s*亿$", text)
+    if match:
+        try:
+            return int(float(match.group(1)) * 100_000_000)
+        except ValueError:
+            return 0
+
+    # Plain number
     try:
         return int(float(text))
     except ValueError:
@@ -64,60 +86,62 @@ def normalize_count(text: str) -> int:
 
 
 async def parse_search_card(card: "ElementHandle") -> dict | None:
-    """解析搜索结果卡片元素，返回结构化笔记摘要数据。
+    """Parse a search result card element into structured note summary data.
 
-    从单个卡片 DOM 元素中提取：
-      - note_id：笔记唯一 ID（从 URL 末段提取）
-      - title：笔记标题（纯图片笔记可能为空）
-      - author：作者昵称
-      - author_id：作者 ID（从用户主页 URL 提取）
-      - cover_url：封面图片 URL
-      - likes：点赞数（整数）
-      - note_url：笔记详情页完整 URL（优先使用 /explore/ 路径）
-      - note_type：笔记类型（"video" / "image"）
-      - publish_time：发布时间（如 "2025-12-05"）
+    Extracts from a single card DOM element:
+      - note_id: unique note ID (last URL segment)
+      - title: note title (may be empty for image-only notes)
+      - author: author nickname
+      - author_id: author ID (from the user profile URL)
+      - cover_url: cover image URL
+      - likes: like count (integer)
+      - note_url: full note detail URL (prefers the /explore/ path)
+      - note_type: note type ("video" / "image")
+      - publish_time: publish time (e.g. "2025-12-05")
 
     Args:
-        card: 单个搜索结果卡片的 ElementHandle
+        card: ElementHandle of a single search result card
 
     Returns:
-        包含上述字段的字典，解析失败返回 None
+        A dict with the fields above, or None if parsing fails
     """
     try:
-        # ---- 笔记 URL 与 ID ----
-        # 卡片内有两种链接：
-        #   1. 隐藏的 <a href="/explore/{note_id}">（无 token，直接导航会 404）
-        #   2. 封面 <a class="cover" href="/search_result/{note_id}?xsec_token=...">
-        # 策略：从隐藏链接提取 note_id，从封面链接获取 xsec_token，
-        #        拼装为 /explore/{note_id}?xsec_token=...&xsec_source=pc_search
+        # ---- Note URL and ID ----
+        # A card contains two kinds of links:
+        #   1. A hidden <a href="/explore/{note_id}"> (no token; navigating to it directly 404s)
+        #   2. The cover <a class="cover" href="/search_result/{note_id}?xsec_token=...">
+        # Strategy: take note_id from the hidden link and xsec_token from the cover link,
+        #        then build /explore/{note_id}?xsec_token=...&xsec_source=pc_search
         note_url: str = ""
         note_id: str = ""
         xsec_token: str = ""
 
-        # 从隐藏的 /explore/ 链接提取 note_id
-        explore_anchor = await card.query_selector('a[href*="/explore/"]')
+        # Extract note_id from the hidden /explore/ link
+        explore_anchor = await card.query_selector(
+            'a[href*="/explore/"], a[href*="/discovery/item/"]'
+        )
         if explore_anchor:
             href = await explore_anchor.get_attribute("href") or ""
             if href:
                 note_id = href.split("?")[0].rstrip("/").split("/")[-1]
 
-        # 从封面 <a class="cover"> 链接提取 xsec_token
+        # Extract xsec_token from the cover <a class="cover"> link
         cover_anchor = await card.query_selector("a.cover")
         if cover_anchor:
             cover_href = await cover_anchor.get_attribute("href") or ""
-            # 格式: /search_result/{note_id}?xsec_token=...&xsec_source=
+            # Format: /search_result/{note_id}?xsec_token=...&xsec_source=
             token_match = re.search(r"xsec_token=([^&]+)", cover_href)
             if token_match:
                 xsec_token = token_match.group(1)
-            # 若隐藏链接未提取到 note_id，从封面链接降级提取
+            # If the hidden link yielded no note_id, fall back to the cover link
             if not note_id:
                 note_id = cover_href.split("?")[0].rstrip("/").split("/")[-1]
 
         if not note_id:
-            logger.warning("卡片缺少 note_id，跳过")
+            logger.warning("Card has no note_id, skipping")
             return None
 
-        # 拼装完整 URL（携带 xsec_token 以避免 403/404 拦截）
+        # Build the full URL (with xsec_token to avoid 403/404 blocks)
         if xsec_token:
             note_url = (
                 f"{_NOTE_BASE_URL}/explore/{note_id}"
@@ -126,8 +150,8 @@ async def parse_search_card(card: "ElementHandle") -> dict | None:
         else:
             note_url = f"{_NOTE_BASE_URL}/explore/{note_id}"
 
-        # ---- 封面图片 ----
-        # 封面 <img> 在 <a class="cover"> 内，排除作者头像（.author-avatar）
+        # ---- Cover image ----
+        # The cover <img> is inside <a class="cover">; exclude the author avatar (.author-avatar)
         cover_url: str = ""
         img_el = await card.query_selector("a.cover img")
         if img_el is None:
@@ -139,15 +163,15 @@ async def parse_search_card(card: "ElementHandle") -> dict | None:
                 or ""
             )
 
-        # ---- 标题 ----
-        # 实际结构：.footer > a.title > span（纯图片笔记可能无标题元素）
+        # ---- Title ----
+        # Actual structure: .footer > a.title > span (image-only notes may have no title element)
         title: str = ""
         for sel in (
-            ".footer a.title span",         # 精确匹配：footer 内 a.title 下的 span
-            ".footer a.title",               # a.title 自身的文本
-            ".footer .title span",           # 降级：.title 下的 span
-            ".footer .title",                # 降级：.title 自身
-            "a.title span",                  # 无 .footer 包裹时
+            ".footer a.title span",         # exact match: span under a.title inside footer
+            ".footer a.title",               # text of a.title itself
+            ".footer .title span",           # fallback: span under .title
+            ".footer .title",                # fallback: .title itself
+            "a.title span",                  # when there is no .footer wrapper
             "a.title",
         ):
             title_el = await card.query_selector(sel)
@@ -156,15 +180,15 @@ async def parse_search_card(card: "ElementHandle") -> dict | None:
                 if title:
                     break
 
-        # ---- 作者信息 ----
-        # 实际结构：.card-bottom-wrapper > a.author > .name-time-wrapper > .name
+        # ---- Author info ----
+        # Actual structure: .card-bottom-wrapper > a.author > .name-time-wrapper > .name
         author: str = ""
         author_id: str = ""
         for sel in (
-            ".card-bottom-wrapper .author .name",   # 精确匹配
-            ".card-bottom-wrapper .name",            # 降级
-            ".author-wrapper .name",                 # 旧版结构
-            ".author .name",                         # 通用降级
+            ".card-bottom-wrapper .author .name",   # exact match
+            ".card-bottom-wrapper .name",            # fallback
+            ".author-wrapper .name",                 # legacy structure
+            ".author .name",                         # generic fallback
         ):
             author_el = await card.query_selector(sel)
             if author_el:
@@ -172,8 +196,8 @@ async def parse_search_card(card: "ElementHandle") -> dict | None:
                 if author:
                     break
 
-        # 从用户主页链接提取 author_id
-        # 实际结构：a.author[href*='/user/profile/{id}?...']
+        # Extract author_id from the user profile link
+        # Actual structure: a.author[href*='/user/profile/{id}?...']
         for sel in (
             ".card-bottom-wrapper a.author[href*='/user/profile/']",
             "a.author[href*='/user/profile/']",
@@ -187,8 +211,8 @@ async def parse_search_card(card: "ElementHandle") -> dict | None:
                     author_id = parts[1].split("?")[0].rstrip("/")
                     break
 
-        # ---- 发布时间 ----
-        # 实际结构：.name-time-wrapper > .time
+        # ---- Publish time ----
+        # Actual structure: .name-time-wrapper > .time
         publish_time: str = ""
         for sel in (".name-time-wrapper .time", ".time"):
             time_el = await card.query_selector(sel)
@@ -197,7 +221,7 @@ async def parse_search_card(card: "ElementHandle") -> dict | None:
                 if publish_time:
                     break
 
-        # ---- 点赞数 ----
+        # ---- Like count ----
         likes: int = 0
         for sel in (".like-wrapper .count", ".likes .count", ".count"):
             like_el = await card.query_selector(sel)
@@ -206,7 +230,7 @@ async def parse_search_card(card: "ElementHandle") -> dict | None:
                 likes = normalize_count(likes_text)
                 break
 
-        # ---- 笔记类型 ----
+        # ---- Note type ----
         note_type: str = "image"
         video_marker = await card.query_selector(
             ".video-icon, .type-video, [class*='play-icon']"
@@ -227,14 +251,14 @@ async def parse_search_card(card: "ElementHandle") -> dict | None:
         }
 
     except Exception as e:
-        logger.warning("解析搜索卡片失败：%s", e, exc_info=True)
+        logger.warning("Failed to parse search card: %s", e, exc_info=True)
         return None
 
 
-# ---------- 笔记详情页解析（Phase 3） ----------
+# ---------- Note detail page parsing (Phase 3) ----------
 
-# 笔记详情页各字段的候选选择器（按优先级排列）
-# 真实 DOM：#noteContainer > .interaction-container > .note-scroller > .note-content
+# Candidate selectors for each note detail field (in priority order)
+# Real DOM: #noteContainer > .interaction-container > .note-scroller > .note-content
 _DETAIL_TITLE_SELECTORS = [
     "#detail-title",
     ".note-content .title",
@@ -246,7 +270,7 @@ _DETAIL_CONTENT_SELECTORS = [
     ".note-content .desc",
 ]
 
-# 真实 DOM：.interaction-container > .author-container > .author-wrapper > .info > .username
+# Real DOM: .interaction-container > .author-container > .author-wrapper > .info > .username
 _DETAIL_AUTHOR_SELECTORS = [
     ".author-container .username",
     ".interaction-container .username",
@@ -258,16 +282,16 @@ _DETAIL_AUTHOR_LINK_SELECTORS = [
     ".interaction-container a[href*='/user/profile/']",
 ]
 
-# 真实 DOM：.note-content > .bottom-container > span.date
+# Real DOM: .note-content > .bottom-container > span.date
 _DETAIL_TIME_SELECTORS = [
     ".note-content .bottom-container .date",
     ".bottom-container .date",
 ]
 
-# 真实 DOM：#detail-desc a#hash-tag.tag
+# Real DOM: #detail-desc a#hash-tag.tag
 _DETAIL_TAG_SELECTOR = "#detail-desc a.tag"
 
-# 真实 DOM：.swiper-slide img
+# Real DOM: .swiper-slide img
 _DETAIL_IMAGE_SELECTORS = [
     ".swiper-slide img",
     ".media-container img",
@@ -282,7 +306,7 @@ _DETAIL_VIDEO_SELECTORS = [
 
 
 async def _query_text(page: "Page", selectors: list[str]) -> str:
-    """在页面中按优先级尝试多个选择器，返回第一个非空文本。"""
+    """Try selectors on the page in priority order and return the first non-empty text."""
     for sel in selectors:
         el = await page.query_selector(sel)
         if el:
@@ -293,31 +317,31 @@ async def _query_text(page: "Page", selectors: list[str]) -> str:
 
 
 async def parse_note_detail(page: "Page", note_id: str) -> dict | None:
-    """解析笔记详情页，返回结构化数据。
+    """Parse a note detail page into structured data.
 
-    从当前已加载的笔记详情页中提取：
+    Extracts from the currently loaded note detail page:
       - note_id / title / content / author / author_id
       - publish_time / likes / collects / comments_count / shares
       - tags / images / note_type / video_url
 
     Args:
-        page: 已加载笔记详情页的 Playwright Page 对象
-        note_id: 笔记 ID（由调用方传入）
+        page: Playwright Page with the note detail page loaded
+        note_id: Note ID (supplied by the caller)
 
     Returns:
-        包含上述字段的字典，解析失败返回 None
+        A dict with the fields above, or None if parsing fails
     """
     try:
-        # ---- 标题 ----
+        # ---- Title ----
         title = await _query_text(page, _DETAIL_TITLE_SELECTORS)
 
-        # ---- 正文内容 ----
+        # ---- Body content ----
         content = await _query_text(page, _DETAIL_CONTENT_SELECTORS)
 
-        # ---- 作者昵称 ----
+        # ---- Author nickname ----
         author = await _query_text(page, _DETAIL_AUTHOR_SELECTORS)
 
-        # ---- 作者 ID ----
+        # ---- Author ID ----
         author_id = ""
         for sel in _DETAIL_AUTHOR_LINK_SELECTORS:
             anchor = await page.query_selector(sel)
@@ -328,12 +352,12 @@ async def parse_note_detail(page: "Page", note_id: str) -> dict | None:
                     author_id = parts[1].split("?")[0].rstrip("/")
                     break
 
-        # ---- 发布时间 ----
+        # ---- Publish time ----
         publish_time = await _query_text(page, _DETAIL_TIME_SELECTORS)
 
-        # ---- 互动数据 ----
-        # 真实 DOM：.interact-container 内有 .like-wrapper / .collect-wrapper / .chat-wrapper
-        # 每个 wrapper 内有 span.count 显示数字
+        # ---- Interaction counts ----
+        # Real DOM: .interact-container holds .like-wrapper / .collect-wrapper / .chat-wrapper
+        # Each wrapper has a span.count showing the number
         likes = await _parse_interact_count(page, [
             ".interact-container .like-wrapper .count",
             ".engage-bar .like-wrapper .count",
@@ -355,7 +379,7 @@ async def parse_note_detail(page: "Page", note_id: str) -> dict | None:
             ".share-wrapper .count",
         ])
 
-        # ---- 标签 ----
+        # ---- Tags ----
         tags: list[str] = []
         tag_els = await page.query_selector_all(_DETAIL_TAG_SELECTOR)
         for tag_el in tag_els:
@@ -363,7 +387,7 @@ async def parse_note_detail(page: "Page", note_id: str) -> dict | None:
             if tag_text:
                 tags.append(tag_text)
 
-        # ---- 图片列表 ----
+        # ---- Image list ----
         images: list[str] = []
         for sel in _DETAIL_IMAGE_SELECTORS:
             img_els = await page.query_selector_all(sel)
@@ -376,9 +400,9 @@ async def parse_note_detail(page: "Page", note_id: str) -> dict | None:
                     )
                     if src and src not in images:
                         images.append(src)
-                break  # 仅使用第一个命中的选择器
+                break  # Use only the first selector that matches
 
-        # ---- 视频 URL 与笔记类型 ----
+        # ---- Video URL and note type ----
         video_url = ""
         note_type = "image"
         for sel in _DETAIL_VIDEO_SELECTORS:
@@ -410,12 +434,12 @@ async def parse_note_detail(page: "Page", note_id: str) -> dict | None:
         }
 
     except Exception as e:
-        logger.warning("解析笔记详情失败（note_id=%s）：%s", note_id, e, exc_info=True)
+        logger.warning("Failed to parse note detail (note_id=%s): %s", note_id, e, exc_info=True)
         return None
 
 
 async def _parse_interact_count(page: "Page", selectors: list[str]) -> int:
-    """在页面中按优先级尝试选择器提取互动计数。"""
+    """Try selectors on the page in priority order to extract an interaction count."""
     for sel in selectors:
         el = await page.query_selector(sel)
         if el:
@@ -425,12 +449,12 @@ async def _parse_interact_count(page: "Page", selectors: list[str]) -> int:
     return 0
 
 
-# ---------- 评论解析（Phase 3） ----------
+# ---------- Comment parsing (Phase 3) ----------
 
-# 评论区各字段的候选选择器
-# 真实 DOM：.comment-item > .comment-inner-container > .right > ...
+# Candidate selectors for each comment field
+# Real DOM: .comment-item > .comment-inner-container > .right > ...
 _COMMENT_USER_SELECTORS = [
-    ".right .author-wrapper .author a.name",  # 精确路径
+    ".right .author-wrapper .author a.name",  # exact path
     ".right .author a.name",
     ".author a.name",
     "a.name",
@@ -446,17 +470,18 @@ _COMMENT_CONTENT_SELECTORS = [
     ".right .content",
 ]
 
-# 真实 DOM：.right > .info > .interactions > .like（inner_text 为数字或"赞"）
+# Real DOM: .right > .info > .interactions > .like (inner_text is a number, or the Chinese placeholder "赞" when there are no likes)
 _COMMENT_LIKE_SELECTORS = [
     ".right .info .interactions .like",
     ".info .like",
 ]
 
-# 真实 DOM：.right > .info > .date > span:first-child（不含 .location）
-# 注意：.date 的 inner_text 包含日期+属地（如 "01-15广东"），需分别提取
+# Real DOM: .right > .info > .date > span:first-child (excluding .location)
+# Note: .date's inner_text is date + IP location run together (e.g. "01-15广东",
+# the location is rendered in Chinese), so the two are extracted separately
 _COMMENT_TIME_SELECTOR = ".right .info .date"
 
-# 真实 DOM：.right > .info > .date > span.location
+# Real DOM: .right > .info > .date > span.location
 _COMMENT_LOCATION_SELECTORS = [
     ".right .info .date .location",
     ".info .location",
@@ -465,9 +490,9 @@ _COMMENT_LOCATION_SELECTORS = [
 
 
 async def parse_comment(comment_el: "ElementHandle", note_id: str) -> dict | None:
-    """解析单条评论元素，返回结构化数据。
+    """Parse a single comment element into structured data.
 
-    真实 DOM 结构：
+    Real DOM structure:
       .comment-item#comment-{id}
         .comment-inner-container
           .avatar
@@ -475,24 +500,24 @@ async def parse_comment(comment_el: "ElementHandle", note_id: str) -> dict | Non
             .author-wrapper > .author > a.name
             .content > span.note-text
             .info
-              .date > span (时间) + span.location (IP 属地)
-              .interactions > .like (点赞数)
+              .date > span (time) + span.location (IP location)
+              .interactions > .like (like count)
 
     Args:
-        comment_el: 单条评论的 ElementHandle（.comment-item 元素）
-        note_id: 所属笔记 ID
+        comment_el: ElementHandle of a single comment (the .comment-item element)
+        note_id: ID of the note the comment belongs to
 
     Returns:
-        包含 comment_id / note_id / user_name / user_id /
-        content / likes / time / ip_location 的字典，失败返回 None
+        A dict with comment_id / note_id / user_name / user_id /
+        content / likes / time / ip_location, or None on failure
     """
     try:
-        # ---- 评论 ID ----
-        # 真实 DOM 中 id 格式为 "comment-{hex_id}"，需去掉前缀
+        # ---- Comment ID ----
+        # In the real DOM the id looks like "comment-{hex_id}"; strip the prefix
         raw_id = await comment_el.get_attribute("id") or ""
         comment_id = raw_id.removeprefix("comment-") if raw_id else ""
 
-        # ---- 评论者昵称 ----
+        # ---- Commenter nickname ----
         user_name = ""
         for sel in _COMMENT_USER_SELECTORS:
             el = await comment_el.query_selector(sel)
@@ -501,7 +526,7 @@ async def parse_comment(comment_el: "ElementHandle", note_id: str) -> dict | Non
                 if user_name:
                     break
 
-        # ---- 评论者 ID ----
+        # ---- Commenter ID ----
         user_id = ""
         for sel in _COMMENT_USER_LINK_SELECTORS:
             anchor = await comment_el.query_selector(sel)
@@ -512,7 +537,7 @@ async def parse_comment(comment_el: "ElementHandle", note_id: str) -> dict | Non
                     user_id = parts[1].split("?")[0].rstrip("/")
                     break
 
-        # ---- 评论内容 ----
+        # ---- Comment content ----
         content = ""
         for sel in _COMMENT_CONTENT_SELECTORS:
             el = await comment_el.query_selector(sel)
@@ -521,8 +546,9 @@ async def parse_comment(comment_el: "ElementHandle", note_id: str) -> dict | Non
                 if content:
                     break
 
-        # ---- 点赞数 ----
-        # .like 的 inner_text 为数字（如 "10"）或 "赞"（无人点赞）
+        # ---- Like count ----
+        # .like's inner_text is a number (e.g. "10") or "赞" (the Chinese "like" label the
+        # site shows as a placeholder when a comment has zero likes)
         likes = 0
         for sel in _COMMENT_LIKE_SELECTORS:
             el = await comment_el.query_selector(sel)
@@ -532,19 +558,20 @@ async def parse_comment(comment_el: "ElementHandle", note_id: str) -> dict | Non
                     likes = normalize_count(text)
                 break
 
-        # ---- 评论时间 & IP 属地 ----
-        # .date 容器内：<span>01-15</span><span class="location">广东</span>
+        # ---- Comment time & IP location ----
+        # Inside the .date container: <span>01-15</span><span class="location">广东</span>
+        # (the IP location is rendered in Chinese)
         time_text = ""
         ip_location = ""
 
-        # 先提取 IP 属地
+        # Extract the IP location first
         for sel in _COMMENT_LOCATION_SELECTORS:
             loc_el = await comment_el.query_selector(sel)
             if loc_el:
                 ip_location = (await loc_el.inner_text()).strip()
                 break
 
-        # 从 .date 容器提取完整文本，去掉属地部分得到纯时间
+        # Take the full text of the .date container and strip the location to get the time
         date_el = await comment_el.query_selector(_COMMENT_TIME_SELECTOR)
         if date_el:
             full_date = (await date_el.inner_text()).strip()
@@ -565,5 +592,5 @@ async def parse_comment(comment_el: "ElementHandle", note_id: str) -> dict | Non
         }
 
     except Exception as e:
-        logger.warning("解析评论失败（note_id=%s）：%s", note_id, e, exc_info=True)
+        logger.warning("Failed to parse comment (note_id=%s): %s", note_id, e, exc_info=True)
         return None

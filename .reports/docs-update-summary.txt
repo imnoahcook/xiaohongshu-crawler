@@ -5,24 +5,24 @@ Generated: 2026-02-27
 Updated Files
 -------------
 CLAUDE.md
-  - Fixed: storage.py 描述 "JSON + CSV" → "JSON + Excel/xlsx"
-  - Fixed: 主分支 "master" → "main"，开发分支改为通用格式
+  - Fixed: storage.py description "JSON + CSV" → "JSON + Excel/xlsx"
+  - Fixed: main branch "master" → "main"; feature branch changed to a generic format
 
 README.md
-  - Rewrote: 从空文件生成完整 README（命令参考、配置说明、输出格式、依赖）
+  - Rewrote: generated a full README from an empty file (command reference, configuration, output format, dependencies)
   - Source: pyproject.toml, config/settings.yaml, src/ modules
 
 Created Files
 -------------
 docs/CONTRIBUTING.md
-  - 开发环境搭建、可用命令、验证测试、代码规范、Git 工作流、PR 清单
+  - Development setup, available commands, verification, code style, Git workflow, PR checklist
   - Source: pyproject.toml, CLAUDE.md, config/settings.yaml
 
 Skipped Files
 -------------
-docs/ENV.md        — 无环境变量（配置通过 YAML 文件管理）
-docs/RUNBOOK.md    — CLI 应用，无部署流程
-docs/API.md        — 无 API 端点（非 Web 服务）
+docs/ENV.md        — no environment variables (configuration is managed via the YAML file)
+docs/RUNBOOK.md    — CLI application, no deployment process
+docs/API.md        — no API endpoints (not a web service)
 
 Staleness Check
 ---------------

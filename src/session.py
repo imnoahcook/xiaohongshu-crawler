@@ -1,26 +1,26 @@
 """
-MCP 服务级浏览器会话管理模块
+MCP service-level browser session management module
 
-职责：
-  - 管理 Playwright 浏览器实例的服务级生命周期（长驻进程，区别于单次 async with）
-  - 通过 asyncio.Lock 序列化所有浏览器操作，防止并发竞争
-  - 提供登录态检查接口，供 MCP 工具调用
-  - 浏览器健康检查 + 崩溃自动恢复（Phase D）
-  - 操作中登录态失效检测（Phase D）
-  - 统一结构化错误格式（Phase D）
+Responsibilities:
+  - Manage the service-level lifecycle of the Playwright browser instance (long-lived process, unlike a one-off async with)
+  - Serialize all browser operations through asyncio.Lock to prevent concurrent races
+  - Provide a login status check interface for MCP tools to call
+  - Browser health check + automatic crash recovery (Phase D)
+  - Detection of login expiry during operations (Phase D)
+  - Unified structured error format (Phase D)
 
-与 BrowserManager 的区别：
-  - BrowserManager：单次采集的 async with 上下文管理器
-  - CrawlerSession：MCP 进程生命周期内持续运行的服务对象，
-    通过 start()/stop() 手动管理生命周期
+Differences from BrowserManager:
+  - BrowserManager: an async with context manager for a single crawl
+  - CrawlerSession: a service object that keeps running for the lifetime of the MCP process,
+    with its lifecycle managed manually via start()/stop()
 
-用法：
+Usage:
     session = CrawlerSession(headless=True)
     await session.start()
     result = await session.check_login_status()
     async with session.browser_lock() as bm:
         page = await bm.new_page()
-        # ... 采集操作
+        # ... crawl operations
     await session.stop()
 """
 
@@ -48,35 +48,35 @@ from src.storage import Storage
 
 logger = logging.getLogger(__name__)
 
-# crawl_keyword 工具使用的默认存储配置
+# Default storage config used by the crawl_keyword tool
 _DEFAULT_STORAGE_CONFIG: dict = {
     "output_dir": "data",
     "save_raw_json": True,
     "save_xlsx": True,
 }
 
-# 采集完整流程的 max_notes 上限（避免单次任务耗时过长）
+# Upper bound on max_notes for the full crawl flow (keeps a single task from running too long)
 _MAX_NOTES_LIMIT = 20
 
 
 def _extract_keyword_from_stem(stem: str) -> str:
-    """从文件名（不含扩展名）提取关键词。
+    """Extract the keyword from a file name (without extension).
 
-    文件名格式：[notes_]{keyword}_{YYYYMMDD}_{HHMMSS}
-    例如：Python教程_20240315_143022  →  Python教程
-          notes_小红书技巧_20240315_143022  →  小红书技巧
+    File name format: [notes_]{keyword}_{YYYYMMDD}_{HHMMSS}
+    For example: python_tutorial_20240315_143022  →  python_tutorial
+                 notes_rednote_tips_20240315_143022  →  rednote_tips
 
     Args:
-        stem: 文件名（不含扩展名）
+        stem: File name (without extension)
 
     Returns:
-        提取到的关键词字符串
+        The extracted keyword string
     """
-    # 去掉 notes_ 前缀（笔记详情文件的命名约定）
+    # Strip the notes_ prefix (naming convention for note detail files)
     if stem.startswith("notes_"):
         stem = stem[6:]
 
-    # 时间戳由两段组成：{YYYYMMDD}_{HHMMSS}，占最后两个 "_" 分隔块
+    # The timestamp has two parts, {YYYYMMDD}_{HHMMSS}, taking up the last two "_"-separated chunks
     parts = stem.rsplit("_", 2)
     if len(parts) >= 3:
         return parts[0]
@@ -84,21 +84,21 @@ def _extract_keyword_from_stem(stem: str) -> str:
 
 
 class CrawlerSession:
-    """服务级浏览器会话，供 MCP 服务进程长驻使用。
+    """Service-level browser session for the long-lived MCP server process.
 
-    设计约束：
-      - 同一时刻只有一个 CrawlerSession 实例应处于运行状态（调用方负责保证）
-      - 所有浏览器操作必须通过 browser_lock() 上下文管理器串行执行
-      - MCP stdio 模式下默认 headless=True，节省资源
-      - 浏览器崩溃时自动尝试恢复一次（Phase D）
-      - 操作失败时检测登录态，返回精确错误码（Phase D）
+    Design constraints:
+      - Only one CrawlerSession instance should be running at a time (the caller is responsible for this)
+      - All browser operations must run serially through the browser_lock() context manager
+      - Defaults to headless=True in MCP stdio mode to save resources
+      - Automatically attempts recovery once when the browser crashes (Phase D)
+      - Checks login status when an operation fails and returns a precise error code (Phase D)
     """
 
     def __init__(self, headless: bool = True) -> None:
-        """初始化会话（不启动浏览器）。
+        """Initialize the session (does not start the browser).
 
         Args:
-            headless: 是否无头模式。MCP 服务默认 True；调试时可设为 False。
+            headless: Whether to run headless. Defaults to True for the MCP server; set to False when debugging.
         """
         self._headless = headless
         self._bm: Optional[BrowserManager] = None
@@ -107,54 +107,54 @@ class CrawlerSession:
         self._lock = asyncio.Lock()
 
     def is_running(self) -> bool:
-        """返回浏览器是否已成功启动并运行中。"""
+        """Return whether the browser has started successfully and is running."""
         return self._running
 
     async def start(self) -> None:
-        """启动浏览器（幂等：已在运行则直接返回）。
+        """Start the browser (idempotent: returns immediately if already running).
 
-        使用 AsyncExitStack 管理 BrowserManager 生命周期：
-          - 若 BrowserManager.__aenter__ 抛出异常，ExitStack 自动清理已注册资源
-          - self._exit_stack / self._bm 仅在启动成功后赋值，确保一致性
+        Uses AsyncExitStack to manage the BrowserManager lifecycle:
+          - If BrowserManager.__aenter__ raises, the ExitStack automatically cleans up registered resources
+          - self._exit_stack / self._bm are assigned only after a successful start, keeping state consistent
 
         Raises:
-            Exception: 浏览器启动失败时透传异常
+            Exception: Propagated as-is when the browser fails to start
         """
         if self._running:
-            logger.debug("浏览器会话已在运行，跳过重复启动")
+            logger.debug("Browser session already running; skipping duplicate start")
             return
 
-        logger.info("启动 MCP 浏览器会话（headless=%s）", self._headless)
+        logger.info("Starting MCP browser session (headless=%s)", self._headless)
         exit_stack = contextlib.AsyncExitStack()
-        # enter_async_context 内部调用 __aenter__，失败时 exit_stack 自动清理
+        # enter_async_context calls __aenter__ internally; exit_stack cleans up automatically on failure
         bm = await exit_stack.enter_async_context(BrowserManager(headless=self._headless))
-        # 全部成功后才赋值，确保 stop() 始终处理完整状态
+        # Assign only after everything succeeds, so stop() always deals with complete state
         self._exit_stack = exit_stack
         self._bm = bm
         self._running = True
-        logger.info("MCP 浏览器会话启动成功")
+        logger.info("MCP browser session started")
 
     async def stop(self) -> None:
-        """关闭浏览器并释放所有资源（幂等：未运行时安全调用）。"""
+        """Close the browser and release all resources (idempotent: safe to call when not running)."""
         if self._exit_stack is not None:
-            logger.info("关闭 MCP 浏览器会话")
-            await self._exit_stack.aclose()  # 调用已注册的 __aexit__(None, None, None)
+            logger.info("Closing MCP browser session")
+            await self._exit_stack.aclose()  # Calls the registered __aexit__(None, None, None)
             self._exit_stack = None
             self._bm = None
         self._running = False
-        logger.info("MCP 浏览器会话已关闭")
+        logger.info("MCP browser session closed")
 
     # ============================================================
-    # Phase D: 健康检查与自动恢复
+    # Phase D: health check and automatic recovery
     # ============================================================
 
     async def _is_browser_healthy(self) -> bool:
-        """检查浏览器是否仍然存活且可用。
+        """Check whether the browser is still alive and usable.
 
-        通过 Playwright context.browser.is_connected() 判断浏览器进程是否正常。
+        Uses Playwright's context.browser.is_connected() to tell whether the browser process is healthy.
 
         Returns:
-            True 表示浏览器健康可用，False 表示不可用
+            True if the browser is healthy and usable, False if it is not
         """
         if self._bm is None:
             return False
@@ -167,12 +167,12 @@ class CrawlerSession:
             return False
 
     async def _ensure_browser(self) -> Optional[BrowserManager]:
-        """确保浏览器可用，崩溃时尝试自动恢复。
+        """Ensure the browser is usable, attempting automatic recovery after a crash.
 
-        检查浏览器健康状态，不健康时执行一次 stop → start 恢复流程。
+        Checks browser health and, if unhealthy, runs the stop → start recovery flow once.
 
         Returns:
-            BrowserManager 实例（可用时），或 None（恢复失败）
+            The BrowserManager instance (when usable), or None (recovery failed)
         """
         if not self._running:
             return None
@@ -180,28 +180,28 @@ class CrawlerSession:
         if await self._is_browser_healthy():
             return self._bm
 
-        # 浏览器不健康，尝试恢复
-        logger.warning("浏览器健康检查失败，尝试自动恢复...")
+        # Browser is unhealthy; attempt recovery
+        logger.warning("Browser health check failed; attempting automatic recovery...")
         await self.stop()
         try:
             await self.start()
-            logger.info("浏览器自动恢复成功")
+            logger.info("Browser automatic recovery succeeded")
             return self._bm
         except Exception as e:
-            logger.error("浏览器自动恢复失败：%s", e)
+            logger.error("Browser automatic recovery failed: %s", e)
             return None
 
     # ============================================================
-    # Phase D: 登录态失效检测
+    # Phase D: login expiry detection
     # ============================================================
 
     async def _check_login_in_lock(self) -> bool:
-        """在已持有锁的情况下检测登录态（内部方法）。
+        """Check login status while already holding the lock (internal method).
 
-        创建临时页面执行登录态检查，确保页面在检查后关闭。
+        Creates a temporary page to run the login check and makes sure the page is closed afterwards.
 
         Returns:
-            True 表示已登录，False 表示未登录或检查失败
+            True if logged in, False if not logged in or the check failed
         """
         if self._bm is None:
             return False
@@ -212,50 +212,50 @@ class CrawlerSession:
             finally:
                 await page.close()
         except Exception as e:
-            logger.warning("锁内登录态检测异常：%s", e)
+            logger.warning("Login check inside lock raised an exception: %s", e)
             return False
 
     @asynccontextmanager
     async def browser_lock(self) -> AsyncGenerator[Optional[BrowserManager], None]:
-        """获取浏览器独占锁，确保操作串行执行。
+        """Acquire the exclusive browser lock so operations run serially.
 
-        用法：
+        Usage:
             async with session.browser_lock() as bm:
                 page = await bm.new_page()
-                # ... 独占操作
+                # ... exclusive operations
 
         Yields:
-            BrowserManager 实例（已启动时），或 None（未启动时）
+            The BrowserManager instance (when started), or None (when not started)
         """
         async with self._lock:
             yield self._bm
 
     async def search_notes(self, keyword: str, max_count: int = 20) -> dict:
-        """按关键词搜索笔记，返回摘要列表（MCP 工具调用入口）。
+        """Search notes by keyword and return a list of summaries (MCP tool entry point).
 
-        Phase D 增强：
-          - 浏览器未启动/崩溃时返回结构化错误（含 code/action）
-          - 搜索空结果时检测登录态，区分 LOGIN_EXPIRED 和正常空结果
+        Phase D enhancements:
+          - Returns a structured error (with code/action) when the browser is not running or has crashed
+          - Checks login status on empty search results to tell LOGIN_EXPIRED apart from a genuine empty result
 
         Args:
-            keyword: 搜索关键词（调用方负责确保非空）
-            max_count: 最多返回条数（默认 20）
+            keyword: Search keyword (the caller is responsible for ensuring it is non-empty)
+            max_count: Maximum number of results to return (default 20)
 
         Returns:
-            正常：{ keyword, count, results }
-            错误：{ error, code, message, action }
+            Success: { keyword, count, results }
+            Error: { error, code, message, action }
         """
-        # 快速路径：浏览器明确未启动时提前返回
+        # Fast path: return early when the browser is definitely not running
         if not self._running:
             return browser_not_running_error().to_dict()
 
         async with self._lock:
-            # 健康检查 + 自动恢复（释放锁前完成，恢复期间其他请求排队等待）
+            # Health check + automatic recovery (done before releasing the lock; other requests queue during recovery)
             bm = await self._ensure_browser()
             if bm is None:
                 return browser_crashed_error().to_dict()
 
-            # 二次防护：_ensure_browser 可能在恢复过程中改变 _bm
+            # Second guard: _ensure_browser may change _bm during recovery
             if self._bm is None:
                 return browser_crashed_error().to_dict()
 
@@ -263,7 +263,7 @@ class CrawlerSession:
                 self._bm, keyword=keyword, max_count=max_count
             )
 
-            # 空结果时检测登录态（区分"真的没搜到"和"登录态失效"）
+            # Check login status on empty results (tells "really found nothing" apart from "login expired")
             if not results:
                 logged_in = await self._check_login_in_lock()
                 if not logged_in:
@@ -276,21 +276,21 @@ class CrawlerSession:
         }
 
     async def get_note_detail(self, note_url: str, max_comments: int = 20) -> dict:
-        """采集单篇笔记详情 + 评论（MCP 工具调用入口）。
+        """Crawl a single note's details + comments (MCP tool entry point).
 
-        Phase D 增强：
-          - 浏览器未启动/崩溃时返回结构化错误
-          - 采集失败时检测登录态，区分 LOGIN_EXPIRED 和 CRAWL_FAILED
+        Phase D enhancements:
+          - Returns a structured error when the browser is not running or has crashed
+          - Checks login status when the crawl fails to tell LOGIN_EXPIRED apart from CRAWL_FAILED
 
         Args:
-            note_url: 笔记详情页完整 URL
-            max_comments: 最多采集评论数（默认 20）
+            note_url: Full URL of the note detail page
+            max_comments: Maximum number of comments to crawl (default 20)
 
         Returns:
-            成功：笔记详情字典（包含 comments 字段）
-            错误：{ error, code, message, action }
+            Success: the note detail dict (including the comments field)
+            Error: { error, code, message, action }
         """
-        # 快速路径：浏览器明确未启动时提前返回
+        # Fast path: return early when the browser is definitely not running
         if not self._running:
             return browser_not_running_error().to_dict()
 
@@ -306,27 +306,27 @@ class CrawlerSession:
                 self._bm, note_url=note_url, max_comments=max_comments
             )
 
-            # 采集失败时检测登录态
+            # Check login status when the crawl fails
             if result is None:
                 logged_in = await self._check_login_in_lock()
                 if not logged_in:
                     return login_expired_error().to_dict()
-                return crawl_failed_error("URL 无效或页面无法加载").to_dict()
+                return crawl_failed_error("URL is invalid or the page could not be loaded").to_dict()
 
         return result
 
     async def check_login_status(self) -> dict:
-        """检查当前小红书登录状态。
+        """Check the current rednote login status.
 
-        Phase D 增强：
-          - 未运行时返回包含 code 字段的结构化错误
+        Phase D enhancements:
+          - Returns a structured error including the code field when not running
 
         Returns:
             {
                 "logged_in": bool,
                 "browser_running": bool,
                 "message": str,
-                "code": str (仅错误时)
+                "code": str (errors only)
             }
         """
         if not self._running:
@@ -351,12 +351,12 @@ class CrawlerSession:
             try:
                 logged_in = await is_logged_in(page)
                 if logged_in:
-                    message = "已登录，可正常使用采集功能。"
+                    message = "Logged in; crawling features are available."
                 else:
                     message = (
-                        "未登录。请先在终端运行 "
-                        "`uv run python scripts/verify_login.py` 完成登录，"
-                        "然后重启 MCP 服务。"
+                        "Not logged in. Run "
+                        "`uv run python scripts/verify_login.py` in a terminal to log in, "
+                        "then restart the MCP server."
                     )
                 return {
                     "logged_in": logged_in,
@@ -372,25 +372,25 @@ class CrawlerSession:
         max_notes: int = 10,
         max_comments: int = 20,
     ) -> dict:
-        """执行完整采集流程：搜索 → 详情 → 评论 → 存储（MCP 工具调用入口）。
+        """Run the full crawl flow: search → details → comments → storage (MCP tool entry point).
 
-        Phase D 增强：
-          - 浏览器未启动/崩溃时返回结构化错误
+        Phase D enhancements:
+          - Returns a structured error when the browser is not running or has crashed
 
         Args:
-            keyword: 搜索关键词（调用方负责确保非空）
-            max_notes: 最多采集笔记数（默认 10，自动限制到 20 以内）
-            max_comments: 每条笔记最多采集评论数（默认 20）
+            keyword: Search keyword (the caller is responsible for ensuring it is non-empty)
+            max_notes: Maximum number of notes to crawl (default 10, automatically capped at 20)
+            max_comments: Maximum number of comments to crawl per note (default 20)
 
         Returns:
-            正常：{ keyword, search_count, detail_count, total_comments, summary }
-            错误：{ error, code, message, action }
+            Success: { keyword, search_count, detail_count, total_comments, summary }
+            Error: { error, code, message, action }
         """
-        # 快速路径：浏览器明确未启动时提前返回
+        # Fast path: return early when the browser is definitely not running
         if not self._running:
             return browser_not_running_error().to_dict()
 
-        # 限制 max_notes 到上限，避免单次任务耗时过长
+        # Cap max_notes at the limit to keep a single task from running too long
         clamped_max_notes = min(max_notes, _MAX_NOTES_LIMIT)
 
         async with self._lock:
@@ -401,12 +401,12 @@ class CrawlerSession:
             if self._bm is None:
                 return browser_crashed_error().to_dict()
 
-            # Step 1: 搜索
+            # Step 1: search
             search_results = await src.search.search_notes(
                 self._bm, keyword=keyword, max_count=clamped_max_notes
             )
 
-            # Step 2: 批量采集详情 + 评论（无结果时跳过）
+            # Step 2: batch-crawl details + comments (skipped when there are no results)
             if search_results:
                 note_details = await src.note.fetch_note_details(
                     self._bm, search_results=search_results, max_comments=max_comments
@@ -414,16 +414,16 @@ class CrawlerSession:
             else:
                 note_details = []
 
-            # Step 3: 持久化（JSON + Excel）
+            # Step 3: persist (JSON + Excel)
             storage = Storage(_DEFAULT_STORAGE_CONFIG)
             storage.save_all(keyword, search_results, note_details)
 
         total_comments = sum(len(note.get("comments", [])) for note in note_details)
         summary = (
-            f"关键词 [{keyword}] 采集完成："
-            f"搜索 {len(search_results)} 条，"
-            f"详情 {len(note_details)} 条，"
-            f"评论 {total_comments} 条"
+            f"Keyword [{keyword}] crawl complete: "
+            f"{len(search_results)} search results, "
+            f"{len(note_details)} note details, "
+            f"{total_comments} comments"
         )
         logger.info(summary)
         return {
@@ -439,14 +439,14 @@ class CrawlerSession:
         keyword: Optional[str] = None,
         data_dir: Path = Path("data"),
     ) -> dict:
-        """查询本地已保存的采集数据文件（不依赖浏览器）。
+        """Query locally saved crawl data files (does not depend on the browser).
 
-        扫描 data/raw/ 和 data/processed/ 目录，返回文件元数据列表。
-        可通过 keyword 参数进行模糊过滤（不区分大小写）。
+        Scans the data/raw/ and data/processed/ directories and returns a list of file metadata.
+        The keyword argument applies a fuzzy filter (case-insensitive).
 
         Args:
-            keyword: 关键词过滤（可选，空值 / None 表示返回所有文件）
-            data_dir: 数据根目录（默认 "data"；测试时传入 tmp_path）
+            keyword: Keyword filter (optional; empty / None returns all files)
+            data_dir: Data root directory (default "data"; tests pass tmp_path)
 
         Returns:
             {
@@ -462,7 +462,7 @@ class CrawlerSession:
             }
         """
         files: list[dict] = []
-        # 只识别 raw 和 processed 两个子目录
+        # Only the raw and processed subdirectories are recognized
         for subdir in ("raw", "processed"):
             dir_path = data_dir / subdir
             if not dir_path.exists():
@@ -472,13 +472,13 @@ class CrawlerSession:
                 if not file_path.is_file():
                     continue
 
-                # 只处理 JSON 和 xlsx 文件
+                # Only handle JSON and xlsx files
                 if file_path.suffix not in (".json", ".xlsx"):
                     continue
 
                 extracted_keyword = _extract_keyword_from_stem(file_path.stem)
 
-                # keyword 过滤：大小写不敏感的模糊匹配
+                # keyword filter: case-insensitive fuzzy match
                 if keyword and keyword.lower() not in extracted_keyword.lower():
                     continue
 

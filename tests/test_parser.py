@@ -1,11 +1,11 @@
 """
-parser 模块单元测试
+Unit tests for the parser module
 
-测试策略：
-  - normalize_count：同步纯函数，直接测试各种输入格式
-  - 异步解析函数：使用 AsyncMock 模拟 Playwright ElementHandle / Page
-    不依赖真实浏览器，完全在进程内运行
-  - 覆盖：正常路径、降级路径（选择器未命中）、异常处理路径
+Test strategy:
+  - normalize_count: synchronous pure function, tested directly across input formats
+  - Async parsing functions: use AsyncMock to mock Playwright ElementHandle / Page;
+    no real browser needed, runs entirely in-process
+  - Coverage: happy path, fallback paths (selector misses), and error-handling paths
 """
 
 from __future__ import annotations
@@ -30,7 +30,11 @@ from src.parser import (
 
 
 class TestNormalizeCount:
-    """测试中文数字文本 → 整数转换。"""
+    """Test count text → integer conversion.
+
+    The Chinese units ("万", "亿") are kept on purpose: rednote renders counts
+    that way even on the English UI.
+    """
 
     def test_empty_string_returns_zero(self):
         assert normalize_count("") == 0
@@ -56,6 +60,18 @@ class TestNormalizeCount:
     def test_comma_separated_number(self):
         assert normalize_count("3,240") == 3240
 
+    def test_k_notation(self):
+        assert normalize_count("1.2K") == 1200
+
+    def test_m_notation(self):
+        assert normalize_count("3.4M") == 3400000
+
+    def test_yi_notation(self):
+        assert normalize_count("1.2亿") == 120000000
+
+    def test_plus_suffix(self):
+        assert normalize_count("10万+") == 100000
+
     def test_whole_wan_unit(self):
         assert normalize_count("2万") == 20000
 
@@ -66,62 +82,62 @@ class TestNormalizeCount:
         assert normalize_count("  500  ") == 500
 
     def test_float_truncated_to_int(self):
-        """浮点数应截断为整数（非四舍五入）。"""
+        """Floats should be truncated to an integer (not rounded)."""
         assert normalize_count("1.9") == 1
 
     def test_wan_with_space_between_number_and_unit(self):
-        """数字与单位之间有空格也应正确解析。"""
+        """A space between the number and the unit should still parse correctly."""
         assert normalize_count("1.2 万") == 12000
 
 
 # ============================================================
-# _query_text（辅助函数）
+# _query_text (helper)
 # ============================================================
 
 
 class TestQueryText:
-    """测试 _query_text 按优先级尝试选择器。"""
+    """Test that _query_text tries selectors in priority order."""
 
     async def test_returns_text_from_first_matching_selector(self):
-        """第一个命中的选择器应返回其文本。"""
+        """The first matching selector should return its text."""
         mock_page = AsyncMock()
         el = AsyncMock()
-        el.inner_text = AsyncMock(return_value="  标题内容  ")
+        el.inner_text = AsyncMock(return_value="  Title text  ")
 
         async def qs(sel):
             return el if sel == ".title" else None
 
         mock_page.query_selector = qs
         result = await _query_text(mock_page, [".other", ".title"])
-        assert result == "标题内容"
+        assert result == "Title text"
 
     async def test_falls_back_when_first_selector_returns_none(self):
-        """第一个选择器未命中时应继续尝试下一个。"""
+        """Should move on to the next selector when the first one misses."""
         mock_page = AsyncMock()
         backup_el = AsyncMock()
-        backup_el.inner_text = AsyncMock(return_value="备用文本")
+        backup_el.inner_text = AsyncMock(return_value="Backup text")
 
         async def qs(sel):
             return backup_el if sel == ".backup" else None
 
         mock_page.query_selector = qs
         result = await _query_text(mock_page, [".primary", ".backup"])
-        assert result == "备用文本"
+        assert result == "Backup text"
 
     async def test_returns_empty_when_no_selector_matches(self):
-        """所有选择器均未命中时应返回空字符串。"""
+        """Should return an empty string when no selector matches."""
         mock_page = AsyncMock()
         mock_page.query_selector = AsyncMock(return_value=None)
         result = await _query_text(mock_page, [".a", ".b"])
         assert result == ""
 
     async def test_skips_element_with_empty_text(self):
-        """元素存在但文本为空时，应继续尝试下一个选择器。"""
+        """Should move on to the next selector when the element exists but its text is empty."""
         mock_page = AsyncMock()
         empty_el = AsyncMock()
         empty_el.inner_text = AsyncMock(return_value="   ")
         real_el = AsyncMock()
-        real_el.inner_text = AsyncMock(return_value="真实内容")
+        real_el.inner_text = AsyncMock(return_value="Real content")
         call_count = 0
 
         async def qs(sel):
@@ -131,19 +147,19 @@ class TestQueryText:
 
         mock_page.query_selector = qs
         result = await _query_text(mock_page, [".empty", ".real"])
-        assert result == "真实内容"
+        assert result == "Real content"
 
 
 # ============================================================
-# _parse_interact_count（辅助函数）
+# _parse_interact_count (helper)
 # ============================================================
 
 
 class TestParseInteractCount:
-    """测试 _parse_interact_count 互动计数提取。"""
+    """Test interaction count extraction in _parse_interact_count."""
 
     async def test_returns_parsed_count_from_matching_selector(self):
-        """命中选择器后应返回解析的整数计数。"""
+        """Should return the parsed integer count once a selector matches."""
         mock_page = AsyncMock()
         el = AsyncMock()
         el.inner_text = AsyncMock(return_value="1.2万")
@@ -152,14 +168,14 @@ class TestParseInteractCount:
         assert result == 12000
 
     async def test_returns_zero_when_no_selector_matches(self):
-        """所有选择器均未命中时应返回 0。"""
+        """Should return 0 when no selector matches."""
         mock_page = AsyncMock()
         mock_page.query_selector = AsyncMock(return_value=None)
         result = await _parse_interact_count(mock_page, [".a", ".b"])
         assert result == 0
 
     async def test_returns_zero_for_empty_text(self):
-        """元素存在但文本为空时应返回 0。"""
+        """Should return 0 when the element exists but its text is empty."""
         mock_page = AsyncMock()
         el = AsyncMock()
         el.inner_text = AsyncMock(return_value="  ")
@@ -174,14 +190,14 @@ class TestParseInteractCount:
 
 
 def _make_text_el(text: str) -> AsyncMock:
-    """创建带固定文本的模拟元素。"""
+    """Create a mock element with fixed text."""
     el = AsyncMock()
     el.inner_text = AsyncMock(return_value=text)
     return el
 
 
 def _make_attr_el(attr_value: str) -> AsyncMock:
-    """创建 get_attribute 返回固定值的模拟元素。"""
+    """Create a mock element whose get_attribute returns a fixed value."""
     el = AsyncMock()
     el.get_attribute = AsyncMock(return_value=attr_value)
     return el
@@ -191,15 +207,15 @@ def _make_search_card(
     explore_href: str = "/explore/abc123",
     cover_href: str = "/search_result/abc123?xsec_token=TOKEN123&xsec_source=pc_search",
     img_data_src: str = "https://example.com/cover.jpg",
-    title: str = "测试标题",
-    author: str = "测试作者",
+    title: str = "Test title",
+    author: str = "Test author",
     user_href: str = "/user/profile/user001?x=1",
     publish_time: str = "2025-01-15",
     likes_text: str = "1.2万",
     is_video: bool = False,
     has_explore_anchor: bool = True,
 ) -> AsyncMock:
-    """创建可配置的模拟搜索结果卡片 ElementHandle。"""
+    """Create a configurable mock search result card ElementHandle."""
     explore_anchor = _make_attr_el(explore_href) if has_explore_anchor else None
     cover_anchor = _make_attr_el(cover_href)
 
@@ -245,35 +261,35 @@ def _make_search_card(
 
 
 class TestParseSearchCard:
-    """测试搜索结果卡片解析。"""
+    """Test search result card parsing."""
 
     async def test_extracts_note_id_from_explore_href(self):
-        """应从 /explore/ 链接末段提取 note_id。"""
+        """Should extract note_id from the last segment of the /explore/ link."""
         card = _make_search_card(explore_href="/explore/abc123def456")
         result = await parse_search_card(card)
         assert result is not None
         assert result["note_id"] == "abc123def456"
 
     async def test_builds_url_with_xsec_token(self):
-        """应拼装包含 xsec_token 的完整 note_url。"""
+        """Should build a full note_url that includes xsec_token."""
         card = _make_search_card(
             cover_href="/search_result/abc123?xsec_token=MYTOKEN&xsec_source=pc_search"
         )
         result = await parse_search_card(card)
         assert result is not None
         assert "xsec_token=MYTOKEN" in result["note_url"]
-        assert "xiaohongshu.com" in result["note_url"]
+        assert "rednote.com" in result["note_url"]
 
     async def test_builds_url_without_xsec_token(self):
-        """封面链接无 xsec_token 时应使用不含 token 的 URL。"""
+        """Should use a token-less URL when the cover link has no xsec_token."""
         card = _make_search_card(cover_href="/search_result/abc123")
         result = await parse_search_card(card)
         assert result is not None
-        # 无 token 时 URL 格式：/explore/{note_id}
+        # URL format without a token: /explore/{note_id}
         assert "xsec_token" not in result["note_url"]
 
     async def test_falls_back_to_cover_anchor_for_note_id(self):
-        """无 /explore/ 链接时，应从封面链接提取 note_id。"""
+        """Should extract note_id from the cover link when there is no /explore/ link."""
         card = _make_search_card(
             has_explore_anchor=False,
             cover_href="/search_result/fallback123?xsec_token=T",
@@ -283,56 +299,56 @@ class TestParseSearchCard:
         assert result["note_id"] == "fallback123"
 
     async def test_returns_none_when_no_note_id(self):
-        """无法提取 note_id 时应返回 None。"""
+        """Should return None when note_id cannot be extracted."""
         card = AsyncMock()
         card.query_selector = AsyncMock(return_value=None)
         result = await parse_search_card(card)
         assert result is None
 
     async def test_parses_title(self):
-        """应正确提取标题文本。"""
-        card = _make_search_card(title="Python 进阶技巧")
+        """Should extract the title text correctly."""
+        card = _make_search_card(title="Advanced Python tips")
         result = await parse_search_card(card)
         assert result is not None
-        assert result["title"] == "Python 进阶技巧"
+        assert result["title"] == "Advanced Python tips"
 
     async def test_parses_author(self):
-        """应正确提取作者昵称。"""
-        card = _make_search_card(author="测试用户名")
+        """Should extract the author nickname correctly."""
+        card = _make_search_card(author="Test username")
         result = await parse_search_card(card)
         assert result is not None
-        assert result["author"] == "测试用户名"
+        assert result["author"] == "Test username"
 
     async def test_parses_author_id_from_user_profile_href(self):
-        """应从用户主页链接提取 author_id。"""
+        """Should extract author_id from the user profile link."""
         card = _make_search_card(user_href="/user/profile/UserID001?extra=x")
         result = await parse_search_card(card)
         assert result is not None
         assert result["author_id"] == "UserID001"
 
     async def test_parses_likes_count(self):
-        """应正确解析点赞数文本（含万单位）。"""
+        """Should parse like-count text correctly (including the Chinese 万 unit the site renders)."""
         card = _make_search_card(likes_text="3.5万")
         result = await parse_search_card(card)
         assert result is not None
         assert result["likes"] == 35000
 
     async def test_note_type_image_by_default(self):
-        """无视频标记时笔记类型应为 'image'。"""
+        """Note type should be 'image' when there is no video marker."""
         card = _make_search_card(is_video=False)
         result = await parse_search_card(card)
         assert result is not None
         assert result["note_type"] == "image"
 
     async def test_note_type_video_when_video_marker_present(self):
-        """有视频标记时笔记类型应为 'video'。"""
+        """Note type should be 'video' when a video marker is present."""
         card = _make_search_card(is_video=True)
         result = await parse_search_card(card)
         assert result is not None
         assert result["note_type"] == "video"
 
     async def test_result_contains_all_required_keys(self):
-        """返回字典应包含所有必需字段。"""
+        """The returned dict should contain all required keys."""
         card = _make_search_card()
         result = await parse_search_card(card)
         assert result is not None
@@ -343,15 +359,15 @@ class TestParseSearchCard:
         assert required.issubset(set(result.keys()))
 
     async def test_returns_none_on_exception(self):
-        """解析过程发生异常时应捕获并返回 None。"""
+        """Exceptions during parsing should be caught and None returned."""
         card = AsyncMock()
         card.query_selector = AsyncMock(side_effect=Exception("DOM error"))
         result = await parse_search_card(card)
         assert result is None
 
     async def test_cover_url_from_img_src_fallback(self):
-        """封面图 data-src 为空时应回退到 src 属性。"""
-        # 创建只有 src 没有 data-src 的 img 元素
+        """Should fall back to the src attribute when the cover image has no data-src."""
+        # Create an img element with src but no data-src
         async def img_get_attr(name):
             if name == "src":
                 return "https://example.com/via-src.jpg"
@@ -362,8 +378,8 @@ class TestParseSearchCard:
 
         explore_anchor = _make_attr_el("/explore/abc123")
         cover_anchor = _make_attr_el("/search_result/abc123?xsec_token=T")
-        title_el = _make_text_el("标题")
-        author_el = _make_text_el("作者")
+        title_el = _make_text_el("Title")
+        author_el = _make_text_el("Author")
         user_anchor = _make_attr_el("/user/profile/u1")
         time_el = _make_text_el("2025-01-15")
         like_el = _make_text_el("100")
@@ -400,9 +416,9 @@ class TestParseSearchCard:
 
 
 def _make_note_page(
-    title: str = "笔记标题",
-    content: str = "笔记正文内容",
-    author: str = "作者昵称",
+    title: str = "Note title",
+    content: str = "Note body content",
+    author: str = "Author nickname",
     author_id: str = "user001",
     publish_time: str = "2025-01-15",
     likes: int = 1200,
@@ -412,8 +428,8 @@ def _make_note_page(
     tags: list[str] | None = None,
     images: list[str] | None = None,
 ) -> AsyncMock:
-    """创建模拟笔记详情页 Page。"""
-    tags = tags or ["#Python", "#教程"]
+    """Create a mock note detail Page."""
+    tags = tags or ["#Python", "#tutorial"]
     images = images or ["https://example.com/img1.jpg"]
 
     def make_el(text):
@@ -454,7 +470,7 @@ def _make_note_page(
             return shares_el
         return None
 
-    # 图片 mock
+    # Image mocks
     img_els = []
     for src in images:
         img_el = AsyncMock()
@@ -481,33 +497,33 @@ def _make_note_page(
 
 
 class TestParseNoteDetail:
-    """测试笔记详情页解析。"""
+    """Test note detail page parsing."""
 
     async def test_parses_title_and_content(self):
-        """应正确解析标题与正文。"""
-        page = _make_note_page(title="Python 教程", content="详细内容")
+        """Should parse the title and body correctly."""
+        page = _make_note_page(title="Python tutorial", content="Detailed content")
         result = await parse_note_detail(page, "note123")
         assert result is not None
-        assert result["title"] == "Python 教程"
-        assert result["content"] == "详细内容"
+        assert result["title"] == "Python tutorial"
+        assert result["content"] == "Detailed content"
 
     async def test_preserves_passed_note_id(self):
-        """note_id 应使用调用方传入的值。"""
+        """note_id should be the value supplied by the caller."""
         page = _make_note_page()
         result = await parse_note_detail(page, "my_note_id")
         assert result is not None
         assert result["note_id"] == "my_note_id"
 
     async def test_parses_author_and_author_id(self):
-        """应正确解析作者昵称与 ID。"""
-        page = _make_note_page(author="博主张三", author_id="ZhangSan007")
+        """Should parse the author nickname and ID correctly."""
+        page = _make_note_page(author="Blogger Zhang San", author_id="ZhangSan007")
         result = await parse_note_detail(page, "note123")
         assert result is not None
-        assert result["author"] == "博主张三"
+        assert result["author"] == "Blogger Zhang San"
         assert result["author_id"] == "ZhangSan007"
 
     async def test_parses_interaction_counts(self):
-        """应正确解析点赞、收藏、评论、分享计数。"""
+        """Should parse like, collect, comment, and share counts correctly."""
         page = _make_note_page(likes=5000, collects=200, comments_count=88, shares=15)
         result = await parse_note_detail(page, "note123")
         assert result is not None
@@ -517,18 +533,18 @@ class TestParseNoteDetail:
         assert result["shares"] == 15
 
     async def test_parses_tags_strips_hash(self):
-        """标签应去掉 # 前缀。"""
-        page = _make_note_page(tags=["#Python", "#机器学习"])
+        """Tags should have the # prefix stripped."""
+        page = _make_note_page(tags=["#Python", "#MachineLearning"])
         result = await parse_note_detail(page, "note123")
         assert result is not None
         assert "Python" in result["tags"]
-        assert "机器学习" in result["tags"]
-        # 原始 # 不应出现
+        assert "MachineLearning" in result["tags"]
+        # The original # must not appear
         for tag in result["tags"]:
             assert not tag.startswith("#")
 
     async def test_parses_images(self):
-        """应正确提取图片 URL 列表。"""
+        """Should extract the image URL list correctly."""
         images = ["https://example.com/a.jpg", "https://example.com/b.jpg"]
         page = _make_note_page(images=images)
         result = await parse_note_detail(page, "note123")
@@ -536,7 +552,7 @@ class TestParseNoteDetail:
         assert set(result["images"]) == set(images)
 
     async def test_result_contains_all_required_keys(self):
-        """返回字典应包含所有必需字段。"""
+        """The returned dict should contain all required keys."""
         page = _make_note_page()
         result = await parse_note_detail(page, "note123")
         assert result is not None
@@ -548,7 +564,7 @@ class TestParseNoteDetail:
         assert required.issubset(set(result.keys()))
 
     async def test_returns_none_on_exception(self):
-        """解析过程发生异常时应捕获并返回 None。"""
+        """Exceptions during parsing should be caught and None returned."""
         page = AsyncMock()
         page.query_selector = AsyncMock(side_effect=Exception("parse error"))
         page.query_selector_all = AsyncMock(side_effect=Exception("parse error"))
@@ -563,15 +579,15 @@ class TestParseNoteDetail:
 
 def _make_comment_el(
     comment_id: str = "comment-abc123",
-    user_name: str = "评论用户",
+    user_name: str = "Commenter",
     user_id: str = "usr001",
-    content: str = "测试评论内容",
+    content: str = "Test comment content",
     likes_text: str = "10",
     time_date: str = "01-15",
     ip_location: str = "广东",
     no_location: bool = False,
 ) -> AsyncMock:
-    """创建模拟评论 ElementHandle。"""
+    """Create a mock comment ElementHandle."""
     comment_el = AsyncMock()
     comment_el.get_attribute = AsyncMock(return_value=comment_id)
 
@@ -586,7 +602,7 @@ def _make_comment_el(
     content_el = make_el(content)
     like_el = make_el(likes_text)
     loc_el = make_el(ip_location) if not no_location else None
-    # date 包含时间 + 属地（如果有）
+    # date holds time + IP location, if any (the site renders e.g. "01-15广东", location in Chinese)
     full_date = f"{time_date}{ip_location}" if ip_location and not no_location else time_date
     date_el = make_el(full_date)
 
@@ -610,52 +626,52 @@ def _make_comment_el(
 
 
 class TestParseComment:
-    """测试单条评论解析。"""
+    """Test single comment parsing."""
 
     async def test_strips_comment_prefix_from_id(self):
-        """应去掉 'comment-' 前缀，保留纯 ID。"""
+        """Should strip the 'comment-' prefix and keep the bare ID."""
         el = _make_comment_el(comment_id="comment-xyz789")
         result = await parse_comment(el, "note123")
         assert result is not None
         assert result["comment_id"] == "xyz789"
 
     async def test_parses_user_name(self):
-        """应正确提取评论用户昵称。"""
-        el = _make_comment_el(user_name="李四")
+        """Should extract the commenter nickname correctly."""
+        el = _make_comment_el(user_name="Li Si")
         result = await parse_comment(el, "note123")
         assert result is not None
-        assert result["user_name"] == "李四"
+        assert result["user_name"] == "Li Si"
 
     async def test_parses_user_id(self):
-        """应从用户主页链接提取 user_id。"""
+        """Should extract user_id from the user profile link."""
         el = _make_comment_el(user_id="UserXYZ")
         result = await parse_comment(el, "note123")
         assert result is not None
         assert result["user_id"] == "UserXYZ"
 
     async def test_parses_content(self):
-        """应正确提取评论正文。"""
-        el = _make_comment_el(content="这条评论很有用")
+        """Should extract the comment body correctly."""
+        el = _make_comment_el(content="This comment is really helpful")
         result = await parse_comment(el, "note123")
         assert result is not None
-        assert result["content"] == "这条评论很有用"
+        assert result["content"] == "This comment is really helpful"
 
     async def test_parses_likes_count(self):
-        """应正确解析点赞数。"""
+        """Should parse the like count correctly."""
         el = _make_comment_el(likes_text="500")
         result = await parse_comment(el, "note123")
         assert result is not None
         assert result["likes"] == 500
 
     async def test_likes_zero_when_text_is_zan(self):
-        """点赞文本为 '赞' 时（无人点赞）应返回 0。"""
+        """Should return 0 when the like text is '赞' (the site's Chinese placeholder for zero likes)."""
         el = _make_comment_el(likes_text="赞")
         result = await parse_comment(el, "note123")
         assert result is not None
         assert result["likes"] == 0
 
     async def test_strips_ip_location_from_time(self):
-        """时间字段应去掉尾部的 IP 属地部分。"""
+        """The time field should have the trailing IP location stripped."""
         el = _make_comment_el(time_date="01-15", ip_location="广东")
         result = await parse_comment(el, "note123")
         assert result is not None
@@ -663,7 +679,7 @@ class TestParseComment:
         assert result["ip_location"] == "广东"
 
     async def test_time_preserved_when_no_ip_location(self):
-        """无 IP 属地时，时间字段应为 .date 容器的完整文本。"""
+        """Without an IP location, the time field should be the full text of the .date container."""
         el = _make_comment_el(time_date="01-20", no_location=True)
         result = await parse_comment(el, "note123")
         assert result is not None
@@ -671,14 +687,14 @@ class TestParseComment:
         assert result["ip_location"] == ""
 
     async def test_note_id_preserved(self):
-        """note_id 应保留为传入的值。"""
+        """note_id should be preserved as passed in."""
         el = _make_comment_el()
         result = await parse_comment(el, "parent_note_999")
         assert result is not None
         assert result["note_id"] == "parent_note_999"
 
     async def test_result_contains_all_required_keys(self):
-        """返回字典应包含所有必需字段。"""
+        """The returned dict should contain all required keys."""
         el = _make_comment_el()
         result = await parse_comment(el, "note123")
         assert result is not None
@@ -689,7 +705,7 @@ class TestParseComment:
         assert required.issubset(set(result.keys()))
 
     async def test_returns_none_on_exception(self):
-        """解析异常时应捕获并返回 None。"""
+        """Parsing exceptions should be caught and None returned."""
         el = AsyncMock()
         el.get_attribute = AsyncMock(side_effect=Exception("DOM error"))
         result = await parse_comment(el, "note123")

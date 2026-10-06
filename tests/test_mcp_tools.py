@@ -1,12 +1,12 @@
 """
-MCP 工具处理器测试（Phase A + Phase B）
+MCP tool handler tests (Phase A + Phase B)
 
-测试 check_login_status / search_notes / get_note_detail MCP 工具及 lifespan 钩子
+Tests the check_login_status / search_notes / get_note_detail MCP tools and the lifespan hook
 
-测试策略：
-  - 通过 patch.object 替换模块级 _session 为 mock
-  - 直接调用工具函数，验证参数传递与返回值格式
-  - 覆盖：正常路径、输入验证、边界值 clamp、session 返回 None 的处理
+Test strategy:
+  - Replace the module-level _session with a mock via patch.object
+  - Call the tool functions directly and verify argument passing and return value format
+  - Covers: happy path, input validation, boundary clamping, handling of a None session result
 """
 
 from __future__ import annotations
@@ -19,11 +19,11 @@ import mcp_server
 
 
 class TestCheckLoginStatusTool:
-    """测试 check_login_status MCP 工具（Phase A）。"""
+    """Test the check_login_status MCP tool (Phase A)."""
 
     async def test_returns_session_result(self):
-        """应将 session.check_login_status() 结果直接返回给调用方。"""
-        mock_result = {"logged_in": True, "browser_running": True, "message": "已登录"}
+        """The session.check_login_status() result should be returned to the caller as-is."""
+        mock_result = {"logged_in": True, "browser_running": True, "message": "Logged in"}
         mock_session = AsyncMock()
         mock_session.check_login_status = AsyncMock(return_value=mock_result)
 
@@ -34,11 +34,11 @@ class TestCheckLoginStatusTool:
         assert result == mock_result
 
     async def test_returns_not_logged_in_response(self):
-        """未登录时应透传 session 返回的状态字典。"""
+        """When not logged in, the status dict returned by the session should be passed through."""
         mock_result = {
             "logged_in": False,
             "browser_running": True,
-            "message": "未登录，请扫码",
+            "message": "Not logged in, please scan the QR code",
         }
         mock_session = AsyncMock()
         mock_session.check_login_status = AsyncMock(return_value=mock_result)
@@ -50,10 +50,10 @@ class TestCheckLoginStatusTool:
 
 
 class TestLifespan:
-    """测试 lifespan 启停钩子。"""
+    """Test the lifespan startup/shutdown hook."""
 
     async def test_lifespan_starts_and_stops_session(self):
-        """进入 lifespan 应启动 session，退出时停止 session。"""
+        """Entering lifespan should start the session; exiting should stop it."""
         mock_session = AsyncMock()
         mock_session.start = AsyncMock()
         mock_session.stop = AsyncMock()
@@ -66,7 +66,7 @@ class TestLifespan:
         mock_session.stop.assert_called_once()
 
     async def test_lifespan_stops_session_on_exception(self):
-        """即使 yield 内抛出异常，lifespan 的 finally 也应确保 stop() 被调用。"""
+        """Even if an exception is raised inside the yield, lifespan's finally should ensure stop() is called."""
         mock_session = AsyncMock()
         mock_session.start = AsyncMock()
         mock_session.stop = AsyncMock()
@@ -74,7 +74,7 @@ class TestLifespan:
         with patch.object(mcp_server, "_session", mock_session):
             try:
                 async with mcp_server.lifespan(MagicMock()):
-                    raise RuntimeError("模拟服务崩溃")
+                    raise RuntimeError("simulated server crash")
             except RuntimeError:
                 pass
 
@@ -82,12 +82,12 @@ class TestLifespan:
 
 
 class TestSearchNotesTool:
-    """测试 search_notes MCP 工具。"""
+    """Test the search_notes MCP tool."""
 
     async def test_returns_results_from_session(self):
-        """正常调用应返回 session 结果，max_count 默认 20。"""
+        """A normal call should return the session result; max_count defaults to 20."""
         mock_result = {
-            "keyword": "测试",
+            "keyword": "test",
             "count": 2,
             "results": [{"note_id": "1"}, {"note_id": "2"}],
         }
@@ -95,13 +95,13 @@ class TestSearchNotesTool:
         mock_session.search_notes = AsyncMock(return_value=mock_result)
 
         with patch.object(mcp_server, "_session", mock_session):
-            result = await mcp_server.search_notes(keyword="测试")
+            result = await mcp_server.search_notes(keyword="test")
 
-        mock_session.search_notes.assert_called_once_with(keyword="测试", max_count=20)
+        mock_session.search_notes.assert_called_once_with(keyword="test", max_count=20)
         assert result == mock_result
 
     async def test_clamps_max_count_above_50(self):
-        """max_count > 50 应被截断到 50。"""
+        """max_count > 50 should be clamped to 50."""
         mock_session = AsyncMock()
         mock_session.search_notes = AsyncMock(return_value={"keyword": "k", "count": 0, "results": []})
 
@@ -112,7 +112,7 @@ class TestSearchNotesTool:
         assert call_kwargs["max_count"] == 50
 
     async def test_clamps_max_count_below_1(self):
-        """max_count < 1 应被截断到 1。"""
+        """max_count < 1 should be clamped to 1."""
         mock_session = AsyncMock()
         mock_session.search_notes = AsyncMock(return_value={"keyword": "k", "count": 0, "results": []})
 
@@ -123,7 +123,7 @@ class TestSearchNotesTool:
         assert call_kwargs["max_count"] == 1
 
     async def test_returns_error_for_empty_keyword(self):
-        """空 keyword 应直接返回错误，不调用 session。"""
+        """An empty keyword should return an error immediately without calling the session."""
         mock_session = AsyncMock()
 
         with patch.object(mcp_server, "_session", mock_session):
@@ -133,7 +133,7 @@ class TestSearchNotesTool:
         mock_session.search_notes.assert_not_called()
 
     async def test_returns_error_for_whitespace_only_keyword(self):
-        """纯空白字符 keyword 应视为空，返回错误。"""
+        """A whitespace-only keyword should be treated as empty and return an error."""
         mock_session = AsyncMock()
 
         with patch.object(mcp_server, "_session", mock_session):
@@ -143,7 +143,7 @@ class TestSearchNotesTool:
         mock_session.search_notes.assert_not_called()
 
     async def test_strips_keyword_before_calling_session(self):
-        """keyword 前后空白应被去除后传入 session。"""
+        """Leading/trailing whitespace should be stripped from keyword before it is passed to the session."""
         mock_session = AsyncMock()
         mock_session.search_notes = AsyncMock(return_value={"keyword": "test", "count": 0, "results": []})
 
@@ -154,7 +154,7 @@ class TestSearchNotesTool:
         assert call_kwargs["keyword"] == "test"
 
     async def test_valid_max_count_at_boundary(self):
-        """边界值 max_count=1 和 max_count=50 应不被修改。"""
+        """Boundary values max_count=1 and max_count=50 should be left unchanged."""
         mock_session = AsyncMock()
         mock_session.search_notes = AsyncMock(return_value={"keyword": "k", "count": 0, "results": []})
 
@@ -168,14 +168,14 @@ class TestSearchNotesTool:
 
 
 class TestGetNoteDetailTool:
-    """测试 get_note_detail MCP 工具。"""
+    """Test the get_note_detail MCP tool."""
 
     async def test_returns_detail_from_session(self):
-        """正常调用应返回 session 结果，max_comments 默认 20。"""
-        mock_detail = {"note_id": "abc123", "title": "测试笔记", "comments": []}
+        """A normal call should return the session result; max_comments defaults to 20."""
+        mock_detail = {"note_id": "abc123", "title": "Test note", "comments": []}
         mock_session = AsyncMock()
         mock_session.get_note_detail = AsyncMock(return_value=mock_detail)
-        note_url = "https://www.xiaohongshu.com/explore/abc123"
+        note_url = "https://www.rednote.com/explore/abc123"
 
         with patch.object(mcp_server, "_session", mock_session):
             result = await mcp_server.get_note_detail(note_url=note_url)
@@ -184,10 +184,10 @@ class TestGetNoteDetailTool:
         assert result == mock_detail
 
     async def test_returns_error_when_session_returns_none(self):
-        """session 返回 None 时应返回含 error=True 的字典。"""
+        """When the session returns None, a dict with error=True should be returned."""
         mock_session = AsyncMock()
         mock_session.get_note_detail = AsyncMock(return_value=None)
-        note_url = "https://www.xiaohongshu.com/explore/abc123"
+        note_url = "https://www.rednote.com/explore/abc123"
 
         with patch.object(mcp_server, "_session", mock_session):
             result = await mcp_server.get_note_detail(note_url=note_url)
@@ -196,10 +196,10 @@ class TestGetNoteDetailTool:
         assert "message" in result
 
     async def test_clamps_max_comments_above_50(self):
-        """max_comments > 50 应被截断到 50。"""
+        """max_comments > 50 should be clamped to 50."""
         mock_session = AsyncMock()
         mock_session.get_note_detail = AsyncMock(return_value={"note_id": "x"})
-        note_url = "https://www.xiaohongshu.com/explore/abc123"
+        note_url = "https://www.rednote.com/explore/abc123"
 
         with patch.object(mcp_server, "_session", mock_session):
             await mcp_server.get_note_detail(note_url=note_url, max_comments=100)
@@ -208,10 +208,10 @@ class TestGetNoteDetailTool:
         assert call_kwargs["max_comments"] == 50
 
     async def test_clamps_max_comments_below_0(self):
-        """max_comments < 0 应被截断到 0。"""
+        """max_comments < 0 should be clamped to 0."""
         mock_session = AsyncMock()
         mock_session.get_note_detail = AsyncMock(return_value={"note_id": "x"})
-        note_url = "https://www.xiaohongshu.com/explore/abc123"
+        note_url = "https://www.rednote.com/explore/abc123"
 
         with patch.object(mcp_server, "_session", mock_session):
             await mcp_server.get_note_detail(note_url=note_url, max_comments=-5)
@@ -220,7 +220,7 @@ class TestGetNoteDetailTool:
         assert call_kwargs["max_comments"] == 0
 
     async def test_returns_error_for_empty_url(self):
-        """空 note_url 应直接返回错误，不调用 session。"""
+        """An empty note_url should return an error immediately without calling the session."""
         mock_session = AsyncMock()
 
         with patch.object(mcp_server, "_session", mock_session):
@@ -230,10 +230,10 @@ class TestGetNoteDetailTool:
         mock_session.get_note_detail.assert_not_called()
 
     async def test_valid_max_comments_at_boundaries(self):
-        """边界值 max_comments=0 和 max_comments=50 应不被修改。"""
+        """Boundary values max_comments=0 and max_comments=50 should be left unchanged."""
         mock_session = AsyncMock()
         mock_session.get_note_detail = AsyncMock(return_value={"note_id": "x"})
-        note_url = "https://www.xiaohongshu.com/explore/abc123"
+        note_url = "https://www.rednote.com/explore/abc123"
 
         with patch.object(mcp_server, "_session", mock_session):
             await mcp_server.get_note_detail(note_url=note_url, max_comments=0)
@@ -244,10 +244,10 @@ class TestGetNoteDetailTool:
         assert mock_session.get_note_detail.call_args[1]["max_comments"] == 50
 
     async def test_error_response_contains_note_url(self):
-        """错误响应应包含原始 note_url，方便调试。"""
+        """The error response should include the original note_url to aid debugging."""
         mock_session = AsyncMock()
         mock_session.get_note_detail = AsyncMock(return_value=None)
-        note_url = "https://www.xiaohongshu.com/explore/abc123"
+        note_url = "https://www.rednote.com/explore/abc123"
 
         with patch.object(mcp_server, "_session", mock_session):
             result = await mcp_server.get_note_detail(note_url=note_url)

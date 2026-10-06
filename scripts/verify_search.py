@@ -1,22 +1,22 @@
 """
-Phase 2 搜索采集验证脚本
+Phase 2 search collection verification script
 
-验证搜索采集的完整链路：
-  1. 复用已有登录态（须先完成登录，参考 verify_login.py）
-  2. 按关键词执行搜索，提取笔记摘要列表
-  3. 将结果存储为 JSON 和 Excel 文件
-  4. 输出验证报告
+Verifies the full search collection pipeline:
+  1. Reuse the existing login state (login must be completed first, see verify_login.py)
+  2. Run a search by keyword and extract the list of note summaries
+  3. Store the results as JSON and Excel files
+  4. Print a verification report
 
-运行方式：
-    uv run python scripts/verify_search.py [关键词]
+How to run:
+    uv run python scripts/verify_search.py [keyword]
 
-示例：
-    uv run python scripts/verify_search.py                  # 使用默认关键词
-    uv run python scripts/verify_search.py "Python教程"     # 指定关键词
+Examples:
+    uv run python scripts/verify_search.py                  # Use the default keyword
+    uv run python scripts/verify_search.py "coffee"         # Specify a keyword
 
-前置条件：
-    - 已完成登录（auth_state/state.json 存在）
-    - 若未登录请先运行：uv run python scripts/verify_login.py
+Prerequisites:
+    - Login completed (auth_state/state.json exists)
+    - If not logged in, first run: uv run python scripts/verify_login.py
 """
 
 import asyncio
@@ -38,48 +38,48 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# 验证用默认关键词（可通过命令行参数覆盖）
-DEFAULT_KEYWORD = "Python教程"
-# 验证时采集条数（少量即可）
+# Default keyword for verification (can be overridden by a command-line argument)
+DEFAULT_KEYWORD = "coffee"
+# Number of notes to collect during verification (a few is enough)
 VERIFY_MAX_COUNT = 5
 
-# 最小预期条数（低于此数视为异常）
+# Minimum expected count (anything below this is treated as abnormal)
 MIN_EXPECTED_COUNT = 1
 
 
 async def run(keyword: str) -> bool:
-    """执行 Phase 2 搜索采集验证。
+    """Run the Phase 2 search collection verification.
 
     Returns:
-        True 表示验证通过，False 表示失败
+        True if verification passed, False if it failed
     """
     print("\n" + "=" * 60)
-    print("  Phase 2 — 搜索采集验证")
+    print("  Phase 2 — Search collection verification")
     print("=" * 60)
-    print(f"  关键词：{keyword}")
-    print(f"  目标条数：{VERIFY_MAX_COUNT}")
+    print(f"  Keyword: {keyword}")
+    print(f"  Target count: {VERIFY_MAX_COUNT}")
     print()
 
-    # ---- 步骤 1: 检查登录态 ----
+    # ---- Step 1: Check the login state ----
     auth_state = Path("auth_state/state.json")
     if not auth_state.exists():
-        print("  ✗ 未找到登录态文件，请先运行 verify_login.py 完成登录")
+        print("  ✗ Login state file not found, please run verify_login.py to log in first")
         return False
 
-    # ---- 步骤 2: 执行搜索采集 ----
+    # ---- Step 2: Run the search collection ----
     results: list[dict] = []
     async with BrowserManager(headless=False) as bm:
-        print("[1/3] 验证登录态...")
+        print("[1/3] Verifying login state...")
         page = await bm.new_page()
         logged_in = await is_logged_in(page)
         await page.close()
 
         if not logged_in:
-            print("  ✗ 登录态已失效，请重新登录")
+            print("  ✗ Login state has expired, please log in again")
             return False
-        print("  ✓ 登录态有效\n")
+        print("  ✓ Login state is valid\n")
 
-        print(f"[2/3] 搜索关键词：{keyword!r}，目标 {VERIFY_MAX_COUNT} 条...")
+        print(f"[2/3] Searching keyword: {keyword!r}, target {VERIFY_MAX_COUNT} notes...")
         results = await search_notes(
             bm,
             keyword=keyword,
@@ -88,20 +88,20 @@ async def run(keyword: str) -> bool:
             scroll_interval=(1.0, 2.5),
         )
 
-    # ---- 步骤 3: 打印结果摘要 ----
-    print(f"\n  共采集到 {len(results)} 条笔记：")
+    # ---- Step 3: Print a summary of the results ----
+    print(f"\n  Collected {len(results)} notes:")
     print("-" * 60)
     for i, note in enumerate(results, start=1):
-        title = note.get("title") or "（无标题）"
-        author = note.get("author") or "（未知作者）"
+        title = note.get("title") or "(no title)"
+        author = note.get("author") or "(unknown author)"
         likes = note.get("likes", 0)
         note_type = note.get("note_type", "image")
         note_id = note.get("note_id", "")
-        print(f"  [{i:02d}] {title[:30]:<30}  作者:{author:<12}  赞:{likes:<6}  类型:{note_type}  ID:{note_id}")
+        print(f"  [{i:02d}] {title[:30]:<30}  Author:{author:<12}  Likes:{likes:<6}  Type:{note_type}  ID:{note_id}")
     print("-" * 60)
 
-    # ---- 步骤 4: 存储结果 ----
-    print(f"\n[3/3] 存储结果...")
+    # ---- Step 4: Store the results ----
+    print(f"\n[3/3] Storing results...")
     if results:
         storage_config = {
             "output_dir": "data",
@@ -115,21 +115,21 @@ async def run(keyword: str) -> bool:
         xlsx_dir = Path("data/processed")
         json_files = list(json_dir.glob(f"*{keyword[:4]}*.json"))
         xlsx_files = list(xlsx_dir.glob("*.xlsx"))
-        print(f"  data/raw/       {len(json_files)} 个 JSON 文件")
-        print(f"  data/processed/ {len(xlsx_files)} 个 Excel 文件")
+        print(f"  data/raw/       {len(json_files)} JSON file(s)")
+        print(f"  data/processed/ {len(xlsx_files)} Excel file(s)")
 
-    # ---- 验证结论 ----
+    # ---- Verification verdict ----
     print()
     passed = len(results) >= MIN_EXPECTED_COUNT
     if passed:
-        print(f"  ✅ Phase 2 搜索采集验证通过（采集 {len(results)} 条）")
+        print(f"  ✅ Phase 2 search collection verification passed ({len(results)} notes collected)")
     else:
-        print(f"  ✗ 验证未通过：采集结果不足（期望 >= {MIN_EXPECTED_COUNT} 条，实际 {len(results)} 条）")
-        print("    可能原因：")
-        print("    1. 卡片选择器已失效（小红书页面改版）")
-        print("    2. 网络问题导致页面未正常加载")
-        print("    3. 登录态异常导致被重定向")
-        print("    建议：在 headless=False 模式下手动检查页面 DOM 结构")
+        print(f"  ✗ Verification failed: not enough results (expected >= {MIN_EXPECTED_COUNT}, got {len(results)})")
+        print("    Possible causes:")
+        print("    1. The card selectors are out of date (rednote page redesign)")
+        print("    2. A network problem prevented the page from loading properly")
+        print("    3. A broken login state caused a redirect")
+        print("    Suggestion: inspect the page DOM structure manually in headless=False mode")
     print()
 
     return passed

@@ -1,109 +1,113 @@
-# 贡献指南
+# Contributing Guide
 
-## 开发环境搭建
+## Development Setup
 
-### 前置条件
+### Prerequisites
 
 - Python 3.10+
-- [uv](https://docs.astral.sh/uv/) 包管理器
+- The [uv](https://docs.astral.sh/uv/) package manager
 
-### 安装步骤
+### Installation
 
 ```bash
-# 克隆仓库
-git clone https://github.com/yangsijie666/xiaohongshu-crawler.git && cd xiaohongshu-crawler
+# Clone the repository
+git clone https://github.com/imnoahcook/xiaohongshu-crawler.git && cd xiaohongshu-crawler
 
-# 安装依赖
+# Install dependencies
 uv sync
 
-# 安装 Chromium
+# Install Chromium
 uv run playwright install chromium
 ```
 
-<!-- AUTO-GENERATED: commands-reference -->
-## 可用命令
+By default the crawler targets https://www.rednote.com. To point it at another origin that serves the same web app (e.g. https://www.xiaohongshu.com), set the `REDNOTE_BASE_URL` environment variable (see `src/site.py`).
 
-| 命令 | 说明 |
+<!-- AUTO-GENERATED: commands-reference -->
+## Available Commands
+
+| Command | Description |
 |------|------|
-| `uv sync` | 安装/同步依赖 |
-| `uv run playwright install chromium` | 安装 Chromium 浏览器 |
-| `uv run python main.py` | 运行完整采集流程 |
-| `uv run python mcp_server.py` | 启动 MCP 服务（stdio 模式） |
-| `uv run python mcp_server.py --transport sse` | 启动 MCP 服务（SSE 模式） |
-| `uv run python mcp_server.py --transport streamable-http` | 启动 MCP 服务（HTTP 模式） |
-| `uv run python scripts/verify_stealth.py` | 反检测验证 |
-| `uv run python scripts/verify_login.py` | 登录验证 |
-| `uv run python scripts/verify_search.py` | 搜索采集验证 |
-| `uv run python scripts/verify_note.py` | 笔记详情+评论验证 |
-| `uv run python scripts/verify_e2e.py` | 端到端集成验证 |
-| `uv run python scripts/verify_mcp_tools.py` | MCP 工具验证 |
-| `uv run pytest --cov` | 运行测试 + 覆盖率 |
-| `uv add <package>` | 添加新依赖 |
+| `uv sync` | Install/sync dependencies |
+| `uv run playwright install chromium` | Install the Chromium browser |
+| `uv run python main.py` | Run the full crawl pipeline |
+| `uv run python mcp_server.py` | Start the MCP server (stdio mode) |
+| `uv run python mcp_server.py --transport sse` | Start the MCP server (SSE mode) |
+| `uv run python mcp_server.py --transport streamable-http` | Start the MCP server (HTTP mode) |
+| `uv run python scripts/verify_stealth.py` | Anti-detection check |
+| `uv run python scripts/verify_login.py` | Login check |
+| `uv run python scripts/verify_search.py` | Search collection check |
+| `uv run python scripts/verify_note.py` | Note detail + comments check |
+| `uv run python scripts/verify_e2e.py` | End-to-end integration check |
+| `uv run python scripts/verify_mcp_tools.py` | MCP tools check |
+| `uv run pytest --cov` | Run tests with coverage |
+| `uv add <package>` | Add a new dependency |
 <!-- /AUTO-GENERATED: commands-reference -->
 
-## 验证测试
+## Verification
 
-项目使用 `scripts/` 目录下的验证脚本进行测试。新增功能后，请运行相关验证脚本确认功能正确。
+The project is tested with the verification scripts under `scripts/`. After adding a feature, run the relevant scripts to confirm it works.
 
 ```bash
-# 验证反检测
+# Verify anti-detection
 uv run python scripts/verify_stealth.py
 
-# 验证登录
+# Verify login
 uv run python scripts/verify_login.py
 
-# 验证搜索采集
+# Verify search collection
 uv run python scripts/verify_search.py
 
-# 验证笔记详情+评论
+# Verify note detail + comments
 uv run python scripts/verify_note.py
 
-# 端到端集成验证
+# End-to-end integration check
 uv run python scripts/verify_e2e.py
 ```
 
-### 编写验证脚本
+Login is manual: on first run a headed browser opens rednote and you either scan the QR code with the rednote app or sign in with phone number + SMS code. The session is then saved to `auth_state/state.json` and reused.
 
-新模块完成后，请在 `scripts/` 目录下添加对应验证脚本：
+### Writing verification scripts
 
-- 文件名格式: `verify_<模块名>.py`
-- 需覆盖: 正常流程、边界条件、错误恢复
-- 使用 `asyncio.run()` 作为入口
-- 通过 `logging` 输出验证结果
+When a new module is finished, add a matching verification script under `scripts/`:
 
-## 代码规范
+- File name format: `verify_<module>.py`
+- Must cover: the happy path, edge cases, and error recovery
+- Use `asyncio.run()` as the entry point
+- Report results through `logging`
 
-- 遵循 PEP 8 风格
-- 使用 type hints
-- 模块级 docstring + 中文行内注释
-- 使用 `pathlib.Path` 管理路径
-- 使用 `logging` 模块记录日志
-- 捕获特定异常，优雅降级
-- 使用 `TYPE_CHECKING` 守卫避免运行时循环导入
+## Code Style
 
-## Git 工作流
+- Follow PEP 8
+- Use type hints
+- Module-level docstrings + English inline comments
+- Use `pathlib.Path` for paths
+- Use the `logging` module for logs
+- Catch specific exceptions and degrade gracefully
+- Use `TYPE_CHECKING` guards to avoid runtime circular imports
 
-### Commit 格式
+## Git Workflow
+
+### Commit format
 
 ```
-<type>(<scope>): 中文描述
+<type>(<scope>): description in English
 ```
 
-类型: `feat`, `fix`, `chore`, `docs`, `refactor`, `test`
+Types: `feat`, `fix`, `chore`, `docs`, `refactor`, `test`
 
-示例:
-- `feat(search): 新增搜索结果去重逻辑`
-- `fix(parser): 修复评论解析空指针异常`
+Examples:
+- `feat(search): deduplicate search results`
+- `fix(parser): handle missing element when parsing comments`
 
-### 分支策略
+### Branching
 
-- 主分支: `master`
-- 功能分支: `feat/<功能名>`
+- Main branch: `master`
+- Feature branches: `feat/<feature-name>`
 
-## PR 提交清单
+## PR Checklist
 
-- [ ] 代码遵循项目编码规范
-- [ ] 新增功能有对应验证脚本
-- [ ] 验证脚本运行通过
-- [ ] Commit message 遵循 Conventional Commits 格式
-- [ ] 无硬编码密钥或敏感信息
+- [ ] Code follows the project's coding conventions
+- [ ] New features have a matching verification script
+- [ ] Verification scripts pass
+- [ ] Commit messages follow the Conventional Commits format
+- [ ] No hard-coded secrets or sensitive information

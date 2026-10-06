@@ -1,159 +1,161 @@
-# 小红书数据采集器 — 技术规划
+# rednote Data Crawler — Technical Plan
 
-> 基于 Playwright 浏览器自动化，采集搜索结果列表、笔记详情、评论（Top 20）
+> Playwright-based browser automation that collects search result lists, note details, and comments (top 20)
 
-## 1. 项目概览
+## 1. Project Overview
 
-### 1.1 目标
+### 1.1 Goals
 
-用自己的账号登录小红书，通过浏览器自动化方式完成以下数据采集：
+Log in to rednote (https://www.rednote.com) with your own account and collect the following data through browser automation:
 
-| 采集目标 | 说明 |
+| Target | Description |
 |----------|------|
-| 搜索结果列表 | 按关键词搜索，提取多页笔记摘要信息 |
-| 笔记详情 | 进入笔记页，提取完整内容、互动数据 |
-| 评论（Top 20） | 提取笔记下前 20 条热门评论 |
+| Search result list | Search by keyword and extract note summaries across multiple pages |
+| Note details | Open the note page and extract the full content and engagement data |
+| Comments (top 20) | Extract the top 20 comments under a note |
 
-### 1.2 技术选型
+### 1.2 Technology Choices
 
-| 组件 | 选型 | 理由 |
+| Component | Choice | Rationale |
 |------|------|------|
-| 语言 | Python 3.10 | 项目已有配置 |
-| 包管理 | uv | 项目已有配置 |
-| 浏览器自动化 | Playwright | 真实浏览器环境，异步 API |
-| 反检测（stealth） | playwright-stealth | 消除 `navigator.webdriver` 等自动化痕迹 |
-| 反检测（指纹） | browserforge | 生成真实浏览器指纹（UA、WebGL、Canvas 等） |
-| 数据存储 | JSON + CSV | 灵活，方便后续分析 |
-| 配置管理 | YAML | 搜索关键词、采集参数外部化 |
+| Language | Python 3.10 | Already configured in the project |
+| Package manager | uv | Already configured in the project |
+| Browser automation | Playwright | Real browser environment, async API |
+| Anti-detection (stealth) | playwright-stealth | Removes automation traces such as `navigator.webdriver` |
+| Anti-detection (fingerprint) | browserforge | Generates realistic browser fingerprints (UA, WebGL, Canvas, etc.) |
+| Data storage | JSON + CSV | Flexible, easy to analyze later |
+| Configuration | YAML | Externalizes search keywords and crawl parameters |
+| Target site | `src/site.py` | `BASE_URL` defaults to `https://www.rednote.com`; override with the `REDNOTE_BASE_URL` env var (e.g. `https://www.xiaohongshu.com`, which serves the same web app) |
 
-### 1.3 反检测方案对比与选型
+### 1.3 Anti-Detection Options and Selection
 
-> **核心问题**：原生 Playwright 虽使用真实 Chromium，但仍暴露多个可被检测的自动化特征。
+> **Core problem**: stock Playwright uses a real Chromium, but still exposes several detectable automation signals.
 
-#### 可被检测的特征
+#### Detectable signals
 
-| 特征 | 说明 |
+| Signal | Description |
 |------|------|
-| `navigator.webdriver = true` | Playwright 默认设置，是最基础的检测点 |
-| `HeadlessChrome` in UA | 无头模式下 User-Agent 包含标识 |
-| WebGL 指纹 | 自动化浏览器的渲染指纹与真实浏览器不同 |
-| Canvas 指纹 | 画布渲染结果可被提取用于指纹识别 |
-| Chrome DevTools Protocol | CDP 连接本身可被检测 |
-| `window.chrome.runtime` | 自动化浏览器缺少此属性 |
-| Permissions API | 自动化浏览器的权限查询行为异常 |
+| `navigator.webdriver = true` | Set by Playwright by default; the most basic detection point |
+| `HeadlessChrome` in UA | The User-Agent contains this marker in headless mode |
+| WebGL fingerprint | An automated browser's rendering fingerprint differs from a real browser's |
+| Canvas fingerprint | Canvas rendering output can be extracted for fingerprinting |
+| Chrome DevTools Protocol | The CDP connection itself can be detected |
+| `window.chrome.runtime` | Missing in automated browsers |
+| Permissions API | Permission queries behave abnormally in automated browsers |
 
-#### 方案对比
+#### Comparison
 
-| 方案 | 反检测能力 | 易用性 | 维护状态 | 适用场景 |
+| Option | Anti-detection strength | Ease of use | Maintenance | Best for |
 |------|-----------|--------|----------|----------|
-| **原生 Playwright** | 低 — 多个特征可被检测 | 高 | 活跃 | 无反爬的站点 |
-| **playwright-stealth** | 中 — 覆盖基础检测点 | 高（一行代码接入） | 活跃 | 轻中度反爬 |
-| **browserforge** | 中高 — 真实指纹生成 | 高（注入 context） | 活跃 | 指纹检测 |
-| **stealth + browserforge** | **高** — 双层防护 | **高** | 活跃 | **推荐组合** |
-| **Camoufox** | 很高 — 修改版 Firefox | 中 | 维护停滞 | 高强度反爬 |
-| **Crawlee** | 高 — 内置 browserforge | 中（框架较重） | 活跃 | 大规模采集 |
+| **Stock Playwright** | Low — several signals are detectable | High | Active | Sites without anti-bot measures |
+| **playwright-stealth** | Medium — covers the basic detection points | High (one line to integrate) | Active | Light to moderate anti-bot measures |
+| **browserforge** | Medium-high — realistic fingerprint generation | High (injected into the context) | Active | Fingerprint detection |
+| **stealth + browserforge** | **High** — two layers of protection | **High** | Active | **Recommended combination** |
+| **Camoufox** | Very high — patched Firefox | Medium | Stalled | Heavy anti-bot measures |
+| **Crawlee** | High — browserforge built in | Medium (heavier framework) | Active | Large-scale crawling |
 
-#### 最终选型：`playwright-stealth` + `browserforge`
+#### Final choice: `playwright-stealth` + `browserforge`
 
-**理由**：
-1. **playwright-stealth** 消除基础自动化痕迹（webdriver 属性、UA 标识、Chrome Runtime 等）
-2. **browserforge** 生成与真实浏览器一致的指纹（UA、屏幕分辨率、WebGL、Canvas 等），避免指纹级检测
-3. 两者组合使用，侵入性低，无需更换浏览器引擎
-4. 对于个人账号、中低频率的采集场景，这套组合足够稳定
+**Rationale**:
+1. **playwright-stealth** removes the basic automation traces (webdriver property, UA marker, Chrome Runtime, etc.)
+2. **browserforge** generates fingerprints consistent with a real browser (UA, screen resolution, WebGL, Canvas, etc.), avoiding fingerprint-level detection
+3. The two combine with little intrusion and no need to switch browser engines
+4. For a personal account crawling at low to moderate frequency, this combination is stable enough
 
 ---
 
-## 2. 项目结构
+## 2. Project Structure
 
 ```
 rednote-crawler/
-├── .plan/                      # 规划文档
+├── .plan/                      # Planning documents
 ├── config/
-│   └── settings.yaml           # 采集配置（关键词、页数、延迟等）
+│   └── settings.yaml           # Crawl config (keywords, page counts, delays, etc.)
 ├── src/
 │   ├── __init__.py
-│   ├── browser.py              # 浏览器管理（启动、反检测、登录态、持久化）
-│   ├── stealth.py              # 反检测配置（stealth + browserforge 集成）
-│   ├── auth.py                 # 登录与会话管理
-│   ├── search.py               # 搜索结果采集
-│   ├── note.py                 # 笔记详情采集
-│   ├── comment.py              # 评论采集
-│   ├── parser.py               # 页面数据解析（DOM → 结构化数据）
-│   └── storage.py              # 数据存储（JSON / CSV）
-├── data/                       # 采集数据输出目录
-│   ├── raw/                    # 原始 JSON 数据
-│   └── processed/              # 处理后的 CSV 数据
-├── auth_state/                 # 浏览器登录态存储（.gitignore）
-├── main.py                     # 入口
+│   ├── site.py                 # Target site config (BASE_URL / REDNOTE_BASE_URL)
+│   ├── browser.py              # Browser management (launch, anti-detection, login state, persistence)
+│   ├── stealth.py              # Anti-detection config (stealth + browserforge integration)
+│   ├── auth.py                 # Login and session management
+│   ├── search.py               # Search result collection
+│   ├── note.py                 # Note detail collection
+│   ├── comment.py              # Comment collection
+│   ├── parser.py               # Page data parsing (DOM → structured data)
+│   └── storage.py              # Data storage (JSON / CSV)
+├── data/                       # Output directory for collected data
+│   ├── raw/                    # Raw JSON data
+│   └── processed/              # Processed CSV data
+├── auth_state/                 # Stored browser login state (.gitignore)
+├── main.py                     # Entry point
 ├── pyproject.toml
 └── README.md
 ```
 
 ---
 
-## 3. 模块详细设计
+## 3. Detailed Module Design
 
-### 3.1 反检测配置模块 — `stealth.py`
+### 3.1 Anti-Detection Config Module — `stealth.py`
 
-**职责**：集成 playwright-stealth 和 browserforge，提供反检测能力
+**Responsibility**: integrate playwright-stealth and browserforge to provide anti-detection
 
-**工作原理**：
+**How it works**:
 
 ```
-                  ┌──────────────────────────────────┐
-                  │         stealth.py                │
-                  │                                    │
-                  │  ┌──────────────────────────────┐  │
-                  │  │   browserforge                │  │
-                  │  │   生成真实浏览器指纹            │  │
-                  │  │   - User-Agent (匹配 OS/版本)  │  │
-                  │  │   - 屏幕分辨率                 │  │
-                  │  │   - WebGL 渲染参数             │  │
-                  │  │   - Canvas 指纹                │  │
-                  │  │   - 语言/时区/平台             │  │
-                  │  └──────────────┬───────────────┘  │
-                  │                 │                    │
-                  │                 ▼                    │
-                  │  ┌──────────────────────────────┐  │
-                  │  │   playwright-stealth          │  │
-                  │  │   消除自动化痕迹               │  │
-                  │  │   - 删除 navigator.webdriver   │  │
-                  │  │   - 修补 chrome.runtime        │  │
-                  │  │   - 伪装 Permissions API       │  │
-                  │  │   - 清除 HeadlessChrome UA     │  │
-                  │  │   - 修补 iframe contentWindow  │  │
-                  │  └──────────────┬───────────────┘  │
-                  │                 │                    │
-                  │                 ▼                    │
-                  │        返回配置好的 context          │
-                  └──────────────────────────────────┘
+                  ┌────────────────────────────────────────┐
+                  │              stealth.py                │
+                  │                                        │
+                  │  ┌──────────────────────────────────┐  │
+                  │  │   browserforge                   │  │
+                  │  │   Generates a real fingerprint   │  │
+                  │  │   - User-Agent (matches OS/ver.) │  │
+                  │  │   - Screen resolution            │  │
+                  │  │   - WebGL rendering parameters   │  │
+                  │  │   - Canvas fingerprint           │  │
+                  │  │   - Language / platform          │  │
+                  │  └────────────────┬─────────────────┘  │
+                  │                   │                    │
+                  │                   ▼                    │
+                  │  ┌──────────────────────────────────┐  │
+                  │  │   playwright-stealth             │  │
+                  │  │   Removes automation traces      │  │
+                  │  │   - Deletes navigator.webdriver  │  │
+                  │  │   - Patches chrome.runtime       │  │
+                  │  │   - Spoofs the Permissions API   │  │
+                  │  │   - Strips HeadlessChrome UA     │  │
+                  │  │   - Patches iframe contentWindow │  │
+                  │  └────────────────┬─────────────────┘  │
+                  │                   │                    │
+                  │                   ▼                    │
+                  │     Returns the configured context     │
+                  └────────────────────────────────────────┘
 ```
 
-**接口设计**：
+**Interface design**:
 
 ```python
 from browserforge.fingerprints import FingerprintGenerator
 from playwright_stealth import stealth_async
 
 class StealthConfig:
-    """反检测配置管理"""
+    """Anti-detection configuration manager"""
 
     def __init__(self):
         self.fingerprint_generator = FingerprintGenerator(
             browser="chrome",
-            os="macos",          # 匹配本机 OS
+            os="macos",          # match the local OS
         )
 
     def generate_fingerprint(self) -> dict:
-        """生成一组真实浏览器指纹"""
+        """Generate a realistic browser fingerprint"""
         return self.fingerprint_generator.generate()
 
     async def apply_stealth(self, page: Page) -> None:
-        """对页面应用 stealth 补丁"""
+        """Apply the stealth patches to a page"""
         await stealth_async(page)
 
     def get_context_options(self) -> dict:
-        """获取注入指纹后的 browser context 配置"""
+        """Return browser context options with the fingerprint injected"""
         fingerprint = self.generate_fingerprint()
         return {
             "user_agent": fingerprint.navigator.userAgent,
@@ -161,30 +163,31 @@ class StealthConfig:
                 "width": fingerprint.screen.width,
                 "height": fingerprint.screen.height,
             },
-            "locale": fingerprint.navigator.language,
-            "timezone_id": "Asia/Shanghai",
-            # browserforge 注入的其他指纹参数
+            "locale": fingerprint.navigator.language or "en-US",
+            # no timezone_id: the context keeps the system timezone
+            # other fingerprint parameters injected by browserforge
         }
 ```
 
-**关键点**：
-- 每次启动浏览器生成新指纹，避免指纹固化被关联
-- fingerprint 的浏览器版本必须与实际 Chromium 版本匹配（否则会被检测到不一致）
-- stealth 补丁在每个新页面打开时自动应用
+**Key points**:
+- A new fingerprint is generated on every browser launch, so a fixed fingerprint cannot be used to link sessions
+- The fingerprint's browser version must match the actual Chromium version (otherwise the mismatch is detectable)
+- The stealth patches are applied automatically whenever a new page opens
+- The context does not pin a timezone (previously `Asia/Shanghai`); the locale falls back to `en-US`
 
-### 3.2 浏览器管理模块 — `browser.py`
+### 3.2 Browser Management Module — `browser.py`
 
-**职责**：管理 Playwright 浏览器实例的生命周期，集成反检测
+**Responsibility**: manage the lifecycle of the Playwright browser instance, with anti-detection integrated
 
-- 启动 Chromium 浏览器（headed / headless 可切换）
-- 通过 `StealthConfig` 注入指纹和 stealth 补丁
-- 加载已保存的登录态（`storage_state`）
-- 提供统一的 `BrowserManager` 上下文管理器
+- Launch the Chromium browser (switchable between headed and headless)
+- Inject the fingerprint and stealth patches via `StealthConfig`
+- Load saved login state (`storage_state`)
+- Provide a single `BrowserManager` context manager
 
 ```python
 class BrowserManager:
     """
-    用法:
+    Usage:
         async with BrowserManager(headless=False) as bm:
             page = await bm.new_page()
             ...
@@ -195,141 +198,144 @@ class BrowserManager:
     async def __aenter__(self) -> "BrowserManager"
     async def __aexit__(self, *args) -> None
     async def new_page(self) -> Page:
-        # 1. 使用 stealth 指纹创建 context
-        # 2. 创建 page
-        # 3. 对 page 应用 stealth 补丁
-        # 4. 返回 page
+        # 1. Create the context with the stealth fingerprint
+        # 2. Create the page
+        # 3. Apply the stealth patches to the page
+        # 4. Return the page
         ...
-    async def save_state(self) -> None      # 保存登录态到 auth_state/
-    async def load_state(self) -> bool       # 加载已有登录态
+    async def save_state(self) -> None      # save login state to auth_state/
+    async def load_state(self) -> bool       # load existing login state
 ```
 
-### 3.3 登录与会话管理模块 — `auth.py`
+### 3.3 Login and Session Management Module — `auth.py`
 
-**职责**：处理首次登录和登录态复用
+**Responsibility**: handle first-time login and reuse of login state
 
-**流程**：
-
-```
-启动 → 检查 auth_state/state.json 是否存在
-  ├── 存在 → 加载 state → 访问首页 → 检测是否仍然有效
-  │     ├── 有效 → 继续采集
-  │     └── 失效 → 进入手动登录流程
-  └── 不存在 → 进入手动登录流程
-
-手动登录流程：
-  1. 打开小红书登录页（headed 模式）
-  2. 控制台提示用户手动扫码/输入登录
-  3. 检测到登录成功后（URL 变化或特定元素出现）
-  4. 保存 storage_state 到 auth_state/state.json
-```
-
-**关键设计**：
-- 登录态文件路径：`auth_state/state.json`
-- 登录成功检测：等待页面出现已登录标识元素
-- 超时设置：手动登录等待 120 秒
-
-### 3.4 搜索结果采集模块 — `search.py`
-
-**职责**：按关键词搜索，采集结果列表
-
-**采集流程**：
+**Flow**:
 
 ```
-1. 导航到小红书搜索页
-2. 输入关键词，触发搜索
-3. 等待搜索结果加载
-4. 滚动页面加载更多结果（按配置的页数/条数）
-5. 解析每条搜索结果卡片
-6. 收集笔记 URL 列表，供后续详情采集
+Start → check whether auth_state/state.json exists
+  ├── Exists → load state → visit the home page → check whether it is still valid
+  │     ├── Valid → continue crawling
+  │     └── Expired → enter the manual login flow
+  └── Missing → enter the manual login flow
+
+Manual login flow:
+  1. Open the rednote login page (headed mode)
+  2. Prompt the user in the console to log in manually: scan the QR code
+     with the rednote app, or use phone number + SMS code
+  3. Detect a successful login (URL change or a specific element appearing)
+  4. Save storage_state to auth_state/state.json
 ```
 
-**采集字段**：
+**Key design decisions**:
+- Login state file path: `auth_state/state.json`
+- Login success detection: wait for an element that marks the logged-in state to appear
+- Timeout: wait 120 seconds for manual login
 
-| 字段 | 说明 |
+### 3.4 Search Result Collection Module — `search.py`
+
+**Responsibility**: search by keyword and collect the result list
+
+**Collection flow**:
+
+```
+1. Navigate to the rednote search page
+2. Enter the keyword and trigger the search
+3. Wait for the search results to load
+4. Scroll the page to load more results (up to the configured pages/count)
+5. Parse each search result card
+6. Collect the list of note URLs for the detail collection step
+```
+
+**Fields collected**:
+
+| Field | Description |
 |------|------|
-| `note_id` | 笔记 ID（从 URL 提取） |
-| `title` | 笔记标题 |
-| `author` | 作者昵称 |
-| `author_id` | 作者 ID |
-| `cover_url` | 封面图片 URL |
-| `likes` | 点赞数 |
-| `note_url` | 笔记详情页 URL |
-| `note_type` | 笔记类型（图文/视频） |
+| `note_id` | Note ID (extracted from the URL) |
+| `title` | Note title |
+| `author` | Author nickname |
+| `author_id` | Author ID |
+| `cover_url` | Cover image URL |
+| `likes` | Like count |
+| `note_url` | Note detail page URL |
+| `note_type` | Note type (image/video) |
 
-**翻页策略**：
-- 小红书搜索结果为瀑布流（无限滚动）
-- 通过 `page.mouse.wheel()` 或 `page.evaluate("window.scrollBy()")` 模拟滚动
-- 每次滚动后等待新内容加载（监测 DOM 元素数量变化）
-- 达到目标条数或无新内容时停止
+**Pagination strategy**:
+- rednote search results are a waterfall feed (infinite scroll)
+- Simulate scrolling with `page.mouse.wheel()` or `page.evaluate("window.scrollBy()")`
+- After each scroll, wait for new content to load (watch for changes in the DOM element count)
+- Stop when the target count is reached or no new content appears
 
-### 3.5 笔记详情采集模块 — `note.py`
+### 3.5 Note Detail Collection Module — `note.py`
 
-**职责**：进入笔记详情页，采集完整信息
+**Responsibility**: open the note detail page and collect the full information
 
-**采集字段**：
+**Fields collected**:
 
-| 字段 | 说明 |
+| Field | Description |
 |------|------|
-| `note_id` | 笔记 ID |
-| `title` | 标题 |
-| `content` | 正文内容（纯文本） |
-| `author` | 作者昵称 |
-| `author_id` | 作者 ID |
-| `publish_time` | 发布时间 |
-| `likes` | 点赞数 |
-| `collects` | 收藏数 |
-| `comments_count` | 评论数 |
-| `shares` | 分享数 |
-| `tags` | 标签列表 |
-| `images` | 图片 URL 列表 |
-| `note_type` | 图文 / 视频 |
-| `video_url` | 视频 URL（视频笔记） |
+| `note_id` | Note ID |
+| `title` | Title |
+| `content` | Body text (plain text) |
+| `author` | Author nickname |
+| `author_id` | Author ID |
+| `publish_time` | Publish time |
+| `likes` | Like count |
+| `collects` | Collect (save) count |
+| `comments_count` | Comment count |
+| `shares` | Share count |
+| `tags` | List of tags |
+| `images` | List of image URLs |
+| `note_type` | Image / video |
+| `video_url` | Video URL (video notes) |
 
-**采集流程**：
+**Accepted note URLs**: `/explore/{id}`, `/discovery/item/{id}`, `/search_result/{id}` (the note ID is extracted from any of these paths).
+
+**Collection flow**:
 
 ```
-1. 打开笔记详情页 URL
-2. 等待页面核心内容加载完成
-3. 解析页面 DOM，提取上述字段
-4. 触发评论采集（调用 comment 模块）
-5. 随机延迟后进入下一条笔记
+1. Open the note detail page URL
+2. Wait for the core page content to finish loading
+3. Parse the page DOM and extract the fields above
+4. Trigger comment collection (call the comment module)
+5. Move on to the next note after a random delay
 ```
 
-### 3.6 评论采集模块 — `comment.py`
+### 3.6 Comment Collection Module — `comment.py`
 
-**职责**：在笔记详情页采集 Top 20 评论
+**Responsibility**: collect the top 20 comments on the note detail page
 
-**采集字段**：
+**Fields collected**:
 
-| 字段 | 说明 |
+| Field | Description |
 |------|------|
-| `comment_id` | 评论 ID |
-| `note_id` | 所属笔记 ID |
-| `user_name` | 评论者昵称 |
-| `user_id` | 评论者 ID |
-| `content` | 评论内容 |
-| `likes` | 评论点赞数 |
-| `time` | 评论时间 |
-| `ip_location` | IP 属地 |
+| `comment_id` | Comment ID |
+| `note_id` | ID of the parent note |
+| `user_name` | Commenter nickname |
+| `user_id` | Commenter ID |
+| `content` | Comment text |
+| `likes` | Comment like count |
+| `time` | Comment time |
+| `ip_location` | IP location |
 
-**采集流程**：
+**Collection flow**:
 
 ```
-1. 在笔记详情页定位评论区域
-2. 滚动评论区加载更多（若不足 20 条）
-3. 按顺序提取前 20 条评论
-4. 解析每条评论的 DOM 元素
+1. Locate the comment section on the note detail page
+2. Scroll the comment section to load more (if fewer than 20)
+3. Extract the first 20 comments in order
+4. Parse each comment's DOM element
 ```
 
-### 3.7 数据解析模块 — `parser.py`
+### 3.7 Data Parsing Module — `parser.py`
 
-**职责**：将页面 DOM 元素转换为结构化数据
+**Responsibility**: convert page DOM elements into structured data
 
-- 提供各页面类型的解析函数
-- 处理数字格式转换（如 "1.2万" → 12000）
-- 处理缺失字段的默认值
-- 清洗文本内容（去除多余空白、特殊字符）
+- Provide parsing functions for each page type
+- Convert number formats (e.g. "1.2万" → 12000)
+- Fill in defaults for missing fields
+- Clean text content (strip extra whitespace and special characters)
 
 ```python
 def parse_search_card(element: ElementHandle) -> dict
@@ -338,194 +344,196 @@ def parse_comment(element: ElementHandle) -> dict
 def normalize_count(text: str) -> int          # "1.2万" → 12000
 ```
 
-### 3.8 数据存储模块 — `storage.py`
+### 3.8 Data Storage Module — `storage.py`
 
-**职责**：将采集结果持久化到本地
+**Responsibility**: persist collected results locally
 
-**存储格式**：
+**Storage format**:
 
 ```
 data/
 ├── raw/
-│   └── {keyword}_{timestamp}.json          # 完整原始数据
+│   └── {keyword}_{timestamp}.json          # complete raw data
 └── processed/
-    ├── search_results_{keyword}.csv         # 搜索结果汇总
-    ├── notes_{keyword}.csv                  # 笔记详情汇总
-    └── comments_{keyword}.csv               # 评论汇总
+    ├── search_results_{keyword}.csv         # search result summary
+    ├── notes_{keyword}.csv                  # note detail summary
+    └── comments_{keyword}.csv               # comment summary
 ```
 
-- JSON：保留完整结构，方便程序读取
-- CSV：扁平化表格，方便 Excel / Pandas 分析
+- JSON: keeps the full structure, easy for programs to read
+- CSV: flattened tables, easy to analyze with Excel / Pandas
+
+> Implementation note: the shipped `storage.py` writes one Excel workbook (`processed/{keyword}_{timestamp}.xlsx`) instead of CSV files, with three sheets named "Search Results", "Note Details", and "Comments".
 
 ---
 
-## 4. 配置文件设计
+## 4. Configuration File Design
 
-`config/settings.yaml`：
+`config/settings.yaml`:
 
 ```yaml
-# 采集配置
+# Crawl settings
 crawler:
-  keywords:                     # 搜索关键词列表
-    - "关键词1"
-    - "关键词2"
-  max_notes_per_keyword: 20     # 每个关键词最多采集笔记数
-  max_comments_per_note: 20     # 每条笔记最多采集评论数
-  scroll_pause: 1.5             # 滚动后等待时间（秒）
-  page_load_timeout: 30         # 页面加载超时（秒）
+  keywords:                     # list of search keywords
+    - "keyword 1"
+    - "keyword 2"
+  max_notes_per_keyword: 20     # max notes to collect per keyword
+  max_comments_per_note: 20     # max comments to collect per note
+  scroll_pause: 1.5             # wait after each scroll (seconds)
+  page_load_timeout: 30         # page load timeout (seconds)
 
-# 延迟配置（模拟人类行为，降低风险）
+# Delay settings (mimic human behaviour to reduce risk)
 delay:
-  between_notes: [2, 5]         # 笔记之间随机延迟范围（秒）
-  between_searches: [3, 8]      # 搜索之间随机延迟范围（秒）
-  scroll_interval: [1, 3]       # 滚动间隔随机延迟范围（秒）
+  between_notes: [2, 5]         # random delay range between notes (seconds)
+  between_searches: [3, 8]      # random delay range between searches (seconds)
+  scroll_interval: [1, 3]       # random delay range between scrolls (seconds)
 
-# 浏览器配置
+# Browser settings
 browser:
-  headless: false               # 是否无头模式（调试时建议 false）
+  headless: false               # headless mode (false recommended while debugging)
   viewport_width: 1280
   viewport_height: 800
 
-# 存储配置
+# Storage settings
 storage:
   output_dir: "data"
-  save_raw_json: true           # 是否保存原始 JSON
-  save_csv: true                # 是否保存 CSV
+  save_raw_json: true           # save raw JSON
+  save_csv: true                # save CSV
 ```
 
 ---
 
-## 5. 采集主流程
+## 5. Main Crawl Flow
 
 ```
-┌─────────────┐
-│   启动程序   │
-└──────┬──────┘
-       │
-       ▼
-┌─────────────┐     ┌──────────────┐
-│  加载配置    │────▶│  初始化浏览器  │
-└─────────────┘     └──────┬───────┘
-                           │
-                           ▼
-                    ┌─────────────┐    失败    ┌──────────────┐
-                    │ 加载登录态   │──────────▶│  手动登录流程  │
-                    └──────┬──────┘           └──────┬───────┘
-                           │ 成功                     │
-                           ▼                          │
-                    ┌─────────────┐◀──────────────────┘
-                    │  保存登录态  │
-                    └──────┬──────┘
-                           │
-              ┌────────────┼────────────┐
-              ▼            ▼            ▼
-        ┌──────────┐ ┌──────────┐ ┌──────────┐
-        │ 关键词 1  │ │ 关键词 2  │ │ 关键词 N  │
-        └────┬─────┘ └────┬─────┘ └────┬─────┘
-             │            │            │
-             ▼            ▼            ▼
-        ┌──────────────────────────────────┐
-        │       搜索 → 翻页 → 采集列表      │
-        └──────────────┬───────────────────┘
-                       │
-                       ▼
-        ┌──────────────────────────────────┐
-        │  遍历笔记 URL → 采集详情 + 评论   │
-        │  （每条笔记之间随机延迟）           │
-        └──────────────┬───────────────────┘
-                       │
-                       ▼
-        ┌──────────────────────────────────┐
-        │     数据存储（JSON + CSV）         │
-        └──────────────────────────────────┘
+┌───────────────┐
+│ Start program │
+└───────┬───────┘
+        │
+        ▼
+┌───────────────┐     ┌──────────────┐
+│  Load config  │────▶│ Init browser │
+└───────────────┘     └──────┬───────┘
+                             │
+                             ▼
+                    ┌──────────────────┐   fail    ┌───────────────────┐
+                    │ Load login state │──────────▶│ Manual login flow │
+                    └────────┬─────────┘           └─────────┬─────────┘
+                             │ ok                            │
+                             ▼                               │
+                    ┌──────────────────┐◀────────────────────┘
+                    │ Save login state │
+                    └────────┬─────────┘
+                             │
+              ┌──────────────┼──────────────┐
+              ▼              ▼              ▼
+        ┌───────────┐  ┌───────────┐  ┌───────────┐
+        │ Keyword 1 │  │ Keyword 2 │  │ Keyword N │
+        └─────┬─────┘  └─────┬─────┘  └─────┬─────┘
+              │              │              │
+              ▼              ▼              ▼
+        ┌─────────────────────────────────────────┐
+        │     Search → scroll → collect list      │
+        └────────────────────┬────────────────────┘
+                             │
+                             ▼
+        ┌─────────────────────────────────────────┐
+        │ For each note URL → details + comments  │
+        │ (random delay between notes)            │
+        └────────────────────┬────────────────────┘
+                             │
+                             ▼
+        ┌─────────────────────────────────────────┐
+        │        Data storage (JSON + CSV)        │
+        └─────────────────────────────────────────┘
 ```
 
 ---
 
-## 6. 反爬与稳定性策略
+## 6. Anti-Bot and Stability Strategy
 
-### 6.1 反检测层（三层防护）
+### 6.1 Anti-Detection Layers (three layers)
 
 ```
-┌──────────────────────────────────────────────────┐
-│  Layer 3: 行为层                                  │
-│  - 随机延迟（模拟人类操作节奏）                     │
-│  - 随机滚动幅度（非固定像素）                       │
-│  - 鼠标移动轨迹（非瞬移）                          │
-│  - 随机 viewport 微调                              │
-├──────────────────────────────────────────────────┤
-│  Layer 2: 指纹层 — browserforge                   │
-│  - 真实 User-Agent（匹配 OS + 浏览器版本）         │
-│  - 屏幕分辨率 / 色深 / 像素比                      │
-│  - WebGL 渲染器 / 供应商信息                       │
-│  - Canvas 指纹一致性                               │
-│  - 语言 / 时区 / 平台属性                          │
-├──────────────────────────────────────────────────┤
-│  Layer 1: 环境层 — playwright-stealth              │
-│  - 删除 navigator.webdriver                        │
-│  - 修补 chrome.runtime                             │
-│  - 伪装 Permissions API                            │
-│  - 清除 HeadlessChrome UA 标识                     │
-│  - 修补 iframe contentWindow                       │
-│  - 修补 navigator.plugins                          │
-└──────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────┐
+│  Layer 3: Behaviour                                  │
+│  - Random delays (mimic a human pace)                │
+│  - Random scroll distances (not fixed pixels)        │
+│  - Mouse movement paths (no teleporting)             │
+│  - Small random viewport adjustments                 │
+├──────────────────────────────────────────────────────┤
+│  Layer 2: Fingerprint — browserforge                 │
+│  - Realistic User-Agent (matches OS + browser ver.)  │
+│  - Screen resolution / colour depth / pixel ratio    │
+│  - WebGL renderer / vendor information               │
+│  - Canvas fingerprint consistency                    │
+│  - Language / platform properties                    │
+├──────────────────────────────────────────────────────┤
+│  Layer 1: Environment — playwright-stealth           │
+│  - Deletes navigator.webdriver                       │
+│  - Patches chrome.runtime                            │
+│  - Spoofs the Permissions API                        │
+│  - Strips the HeadlessChrome UA marker               │
+│  - Patches iframe contentWindow                      │
+│  - Patches navigator.plugins                         │
+└──────────────────────────────────────────────────────┘
 ```
 
-### 6.2 稳定性策略
+### 6.2 Stability Strategy
 
-| 策略 | 实现方式 |
+| Strategy | Implementation |
 |------|----------|
-| 随机延迟 | 每次操作间加入 `random.uniform(min, max)` 延迟 |
-| 指纹轮换 | 每次启动浏览器生成新指纹，避免被关联追踪 |
-| 登录态复用 | `storage_state` 持久化，避免频繁登录 |
-| 错误重试 | 页面加载失败时重试 2 次，超过则跳过并记录 |
-| 异常恢复 | 采集中断时已采集数据不丢失（实时写入） |
-| 速率控制 | 可配置的延迟参数，按需调整采集速度 |
-| 检测感知 | 遇到验证码/风控页面时暂停并通知用户 |
+| Random delays | Add a `random.uniform(min, max)` delay between operations |
+| Fingerprint rotation | Generate a new fingerprint on each browser launch to avoid linkage and tracking |
+| Login state reuse | Persist `storage_state` to avoid frequent logins |
+| Retry on error | Retry failed page loads twice; beyond that, skip and log |
+| Failure recovery | Data already collected is not lost if a crawl is interrupted (written as it goes) |
+| Rate control | Configurable delay parameters to tune crawl speed as needed |
+| Detection awareness | Pause and notify the user on a CAPTCHA / risk-control page |
 
 ---
 
-## 7. 实现步骤（开发顺序）
+## 7. Implementation Steps (development order)
 
-### Phase 1：基础框架 + 反检测
-- [x] 初始化项目依赖（playwright, playwright-stealth, browserforge, pyyaml）
-- [x] 实现 `stealth.py` — 反检测配置（stealth 补丁 + 指纹生成）
-- [x] 实现 `browser.py` — 浏览器生命周期管理（集成 stealth）
-- [x] 实现 `auth.py` — 登录与会话持久化
-- [x] 验证：浏览器通过反检测测试站点（如 bot.sannysoft.com）— `scripts/verify_stealth.py`
-- [x] 验证：能手动登录并保存/复用登录态 — `scripts/verify_login.py`
+### Phase 1: Foundation + Anti-Detection
+- [x] Initialize project dependencies (playwright, playwright-stealth, browserforge, pyyaml)
+- [x] Implement `stealth.py` — anti-detection config (stealth patches + fingerprint generation)
+- [x] Implement `browser.py` — browser lifecycle management (stealth integrated)
+- [x] Implement `auth.py` — login and session persistence
+- [x] Verify: the browser passes an anti-detection test site (e.g. bot.sannysoft.com) — `scripts/verify_stealth.py`
+- [x] Verify: manual login works and login state can be saved/reused — `scripts/verify_login.py`
 
-### Phase 2：搜索采集
-- [x] 实现 `search.py` — 搜索结果列表采集
-- [x] 实现 `parser.py` — 搜索卡片解析
-- [x] 实现 `storage.py` — JSON / CSV 存储
-- [x] 验证：能按关键词搜索并导出搜索结果
+### Phase 2: Search Collection
+- [x] Implement `search.py` — search result list collection
+- [x] Implement `parser.py` — search card parsing
+- [x] Implement `storage.py` — JSON / CSV storage
+- [x] Verify: can search by keyword and export the search results
 
-### Phase 3：详情与评论
-- [x] 实现 `note.py` — 笔记详情采集
-- [x] 实现 `comment.py` — 评论采集
-- [x] 补充 `parser.py` — 详情页和评论解析
-- [x] 扩展 `storage.py` — 笔记详情和评论存储
-- [x] 验证：能完整采集笔记详情 + Top 20 评论 — `scripts/verify_note.py`
+### Phase 3: Details and Comments
+- [x] Implement `note.py` — note detail collection
+- [x] Implement `comment.py` — comment collection
+- [x] Extend `parser.py` — detail page and comment parsing
+- [x] Extend `storage.py` — note detail and comment storage
+- [x] Verify: can collect full note details + top 20 comments — `scripts/verify_note.py`
 
-### Phase 4：整合与优化
-- [x] 实现 `main.py` — 串联完整采集流程
-- [x] 实现配置文件加载（`settings.yaml`）
-- [x] 添加日志输出（采集进度、错误信息）
-- [x] 端到端测试：关键词 → 搜索 → 详情 → 评论 → 导出（`scripts/verify_e2e.py`）
+### Phase 4: Integration and Polish
+- [x] Implement `main.py` — wire up the full crawl pipeline
+- [x] Implement config file loading (`settings.yaml`)
+- [x] Add logging (crawl progress, error messages)
+- [x] End-to-end test: keyword → search → details → comments → export (`scripts/verify_e2e.py`)
 
 ---
 
-## 8. 依赖清单
+## 8. Dependency List
 
 ```
-playwright              # 浏览器自动化核心
-playwright-stealth      # 反检测：消除自动化痕迹
-browserforge            # 反检测：真实浏览器指纹生成
-pyyaml                  # 配置文件解析
+playwright              # browser automation core
+playwright-stealth      # anti-detection: removes automation traces
+browserforge            # anti-detection: realistic browser fingerprint generation
+pyyaml                  # config file parsing
 ```
 
-安装命令：
+Install commands:
 
 ```bash
 uv add playwright playwright-stealth browserforge pyyaml
@@ -534,9 +542,9 @@ uv run playwright install chromium
 
 ---
 
-## 9. 注意事项
+## 9. Notes
 
-1. **仅供个人使用** — 此工具仅用于个人账号的数据采集，不用于商业用途或大规模爬取
-2. **合理频率** — 通过延迟配置控制采集速度，避免对平台造成压力
-3. **登录态安全** — `auth_state/` 目录已加入 `.gitignore`，不会提交到代码仓库
-4. **数据安全** — `data/` 目录建议也加入 `.gitignore`
+1. **Personal use only** — this tool is only for collecting data with a personal account, not for commercial use or large-scale scraping
+2. **Reasonable frequency** — control the crawl speed with the delay settings to avoid putting load on the platform
+3. **Login state security** — the `auth_state/` directory is in `.gitignore` and will not be committed
+4. **Data security** — the `data/` directory should also be added to `.gitignore`

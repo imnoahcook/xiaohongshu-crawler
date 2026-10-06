@@ -1,11 +1,11 @@
 """
-note 模块单元测试
+Unit tests for the note module
 
-测试策略：
-  - BrowserManager 使用 AsyncMock 模拟，不依赖真实浏览器
-  - asyncio.sleep 打补丁为 no-op，避免测试延迟
-  - parse_note_detail / fetch_comments 打补丁隔离依赖
-  - 覆盖：fetch_note_details、_fetch_single_note、_wait_for_content
+Test strategy:
+  - BrowserManager is mocked with AsyncMock, with no dependency on a real browser
+  - asyncio.sleep is patched to a no-op to avoid test delays
+  - parse_note_detail / fetch_comments are patched to isolate dependencies
+  - Covers: fetch_note_details, _fetch_single_note, _wait_for_content
 """
 
 from __future__ import annotations
@@ -19,17 +19,17 @@ from src.note import _fetch_single_note, _wait_for_content, fetch_note_details
 
 
 # ============================================================
-# 辅助函数
+# Helpers
 # ============================================================
 
-_VALID_URL = "https://www.xiaohongshu.com/explore/abc123?xsec_token=T"
+_VALID_URL = "https://www.rednote.com/explore/abc123?xsec_token=T"
 
 
 def _make_page(
     goto_raises: Exception | None = None,
     wait_raises: type | None = None,
 ) -> AsyncMock:
-    """创建模拟 Page。"""
+    """Create a mock Page."""
     page = AsyncMock()
     if goto_raises:
         page.goto = AsyncMock(side_effect=goto_raises)
@@ -55,28 +55,28 @@ def _make_bm(page: AsyncMock | None = None) -> AsyncMock:
 
 
 class TestWaitForContent:
-    """测试内容等待逻辑。"""
+    """Tests for the content waiting logic."""
 
     async def test_returns_on_first_selector_found(self):
-        """第一个选择器命中时应立即返回（不抛出）。"""
+        """Should return immediately when the first selector matches (no exception)."""
         page = AsyncMock()
         page.wait_for_selector = AsyncMock(return_value=None)
 
         with patch("asyncio.sleep", new=AsyncMock()) as mock_sleep:
             await _wait_for_content(page)
 
-        # 有额外 sleep（_RENDER_WAIT）
+        # There is an extra sleep (_RENDER_WAIT)
         mock_sleep.assert_called()
 
     async def test_continues_on_all_selector_timeout(self):
-        """所有选择器超时后应等待固定时间继续（不抛出）。"""
+        """Should continue after a fixed wait when all selectors time out (no exception)."""
         page = AsyncMock()
         page.wait_for_selector = AsyncMock(
             side_effect=PlaywrightTimeoutError("timeout")
         )
 
         with patch("asyncio.sleep", new=AsyncMock()):
-            # 不应抛出异常
+            # Should not raise
             await _wait_for_content(page)
 
 
@@ -86,13 +86,13 @@ class TestWaitForContent:
 
 
 class TestFetchSingleNote:
-    """测试单条笔记采集内部实现。"""
+    """Tests for the internal single-note collection implementation."""
 
     async def test_returns_detail_with_comments_on_success(self):
-        """成功时应返回包含 comments 字段的详情字典。"""
+        """Should return a detail dict with a comments field on success."""
         page = _make_page()
         bm = _make_bm(page)
-        mock_detail = {"note_id": "abc123", "title": "测试"}
+        mock_detail = {"note_id": "abc123", "title": "Test"}
         mock_comments = [{"comment_id": "c1"}]
 
         with (
@@ -114,7 +114,7 @@ class TestFetchSingleNote:
         assert result["note_id"] == "abc123"
 
     async def test_returns_none_when_parse_returns_none(self):
-        """parse_note_detail 返回 None 时应返回 None。"""
+        """Should return None when parse_note_detail returns None."""
         page = _make_page()
         bm = _make_bm(page)
 
@@ -134,7 +134,7 @@ class TestFetchSingleNote:
         assert result is None
 
     async def test_returns_none_on_general_exception(self):
-        """采集过程发生其他异常时应返回 None。"""
+        """Should return None when any other exception occurs during collection."""
         page = _make_page()
         bm = _make_bm(page)
 
@@ -154,8 +154,8 @@ class TestFetchSingleNote:
         assert result is None
 
     async def test_retries_on_timeout(self):
-        """加载超时时应进行重试。"""
-        # 第一次超时，第二次成功
+        """Should retry when the page load times out."""
+        # First attempt times out, second succeeds
         page1 = _make_page(goto_raises=PlaywrightTimeoutError("timeout"))
         page2 = _make_page()
         bm = AsyncMock()
@@ -177,13 +177,13 @@ class TestFetchSingleNote:
                 scroll_interval=(0.0, 0.0),
             )
 
-        # 成功在第二次重试
+        # Succeeds on the second attempt
         assert result is not None
         assert bm.new_page.call_count == 2
 
     async def test_returns_none_after_max_retries(self):
-        """超过最大重试次数后应返回 None。"""
-        # _MAX_RETRIES = 2，所以需要 3 次失败
+        """Should return None once the maximum number of retries is exceeded."""
+        # _MAX_RETRIES = 2, so 3 failures are needed
         pages = [_make_page(goto_raises=PlaywrightTimeoutError("timeout")) for _ in range(3)]
         bm = AsyncMock()
         bm.new_page = AsyncMock(side_effect=pages)
@@ -201,7 +201,7 @@ class TestFetchSingleNote:
         assert result is None
 
     async def test_closes_page_on_success(self):
-        """成功时也应关闭页面。"""
+        """Should close the page on success too."""
         page = _make_page()
         bm = _make_bm(page)
         mock_detail = {"note_id": "abc123"}
@@ -229,10 +229,10 @@ class TestFetchSingleNote:
 
 
 class TestFetchNoteDetails:
-    """测试批量笔记详情采集。"""
+    """Tests for bulk note detail collection."""
 
     async def test_returns_empty_for_empty_input(self):
-        """搜索结果为空时应返回空列表。"""
+        """Should return an empty list when the search results are empty."""
         bm = AsyncMock()
 
         result = await fetch_note_details(bm, [], max_comments=5)
@@ -240,30 +240,30 @@ class TestFetchNoteDetails:
         assert result == []
 
     async def test_skips_items_missing_note_url(self):
-        """缺少 note_url 的条目应被跳过。"""
+        """Items missing note_url should be skipped."""
         bm = AsyncMock()
-        search_results = [{"note_id": "abc123"}]  # 无 note_url
+        search_results = [{"note_id": "abc123"}]  # No note_url
 
         result = await fetch_note_details(bm, search_results, max_comments=5)
 
         assert result == []
 
     async def test_skips_items_missing_note_id(self):
-        """缺少 note_id 的条目应被跳过。"""
+        """Items missing note_id should be skipped."""
         bm = AsyncMock()
-        search_results = [{"note_url": _VALID_URL}]  # 无 note_id
+        search_results = [{"note_url": _VALID_URL}]  # No note_id
 
         result = await fetch_note_details(bm, search_results, max_comments=5)
 
         assert result == []
 
     async def test_collects_successful_details(self):
-        """成功采集的笔记应被包含在结果中。"""
+        """Successfully collected notes should be included in the results."""
         bm = AsyncMock()
         search_results = [
             {"note_id": "abc123", "note_url": _VALID_URL},
         ]
-        mock_detail = {"note_id": "abc123", "title": "测试", "comments": []}
+        mock_detail = {"note_id": "abc123", "title": "Test", "comments": []}
 
         with (
             patch("src.note._fetch_single_note", return_value=mock_detail),
@@ -275,7 +275,7 @@ class TestFetchNoteDetails:
         assert result[0]["note_id"] == "abc123"
 
     async def test_skips_failed_notes(self):
-        """采集失败（返回 None）的笔记应被跳过。"""
+        """Notes whose collection failed (returned None) should be skipped."""
         bm = AsyncMock()
         search_results = [
             {"note_id": "abc123", "note_url": _VALID_URL},
@@ -290,11 +290,11 @@ class TestFetchNoteDetails:
         assert result == []
 
     async def test_processes_multiple_notes(self):
-        """应处理多条笔记，全部成功时全部返回。"""
+        """Should process multiple notes and return all of them when all succeed."""
         bm = AsyncMock()
         search_results = [
-            {"note_id": "n1", "note_url": "https://www.xiaohongshu.com/explore/n1"},
-            {"note_id": "n2", "note_url": "https://www.xiaohongshu.com/explore/n2"},
+            {"note_id": "n1", "note_url": "https://www.rednote.com/explore/n1"},
+            {"note_id": "n2", "note_url": "https://www.rednote.com/explore/n2"},
         ]
         call_count = 0
 
@@ -315,10 +315,10 @@ class TestFetchNoteDetails:
         assert len(result) == 2
 
     async def test_no_delay_after_last_note(self):
-        """最后一条笔记后不应有延迟。"""
+        """There should be no delay after the last note."""
         bm = AsyncMock()
         search_results = [
-            {"note_id": "n1", "note_url": "https://www.xiaohongshu.com/explore/n1"},
+            {"note_id": "n1", "note_url": "https://www.rednote.com/explore/n1"},
         ]
 
         with (
@@ -332,7 +332,7 @@ class TestFetchNoteDetails:
                 delay_range=(0.0, 0.0),
             )
 
-        # 只有一条笔记，不应有笔记间延迟（_wait_for_content 内部有 sleep，但 delay 不应调用）
-        # 只检查延迟总次数（仅 _RENDER_WAIT sleep 调用），不直接断言 sleep 次数
-        # 主要验证没有因 delay 而抛出异常
-        assert True  # 如果执行到这里说明没有异常
+        # With only one note there should be no between-note delay (_wait_for_content sleeps internally, but the delay should not be called)
+        # Only the total number of delays is checked (just the _RENDER_WAIT sleep call); the sleep count is not asserted directly
+        # Mainly verifies that the delay raised no exception
+        assert True  # Reaching this point means no exception was raised

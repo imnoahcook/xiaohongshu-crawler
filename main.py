@@ -1,17 +1,17 @@
 """
-小红书数据采集器 — 主入口
+rednote data crawler — main entry point
 
-完整采集流程：
-  1. 加载配置（config/settings.yaml）
-  2. 初始化浏览器（BrowserManager + 反检测）
-  3. 确保登录态就绪（复用或手动登录）
-  4. 遍历关键词列表：
-     a. 搜索 → 采集笔记摘要列表
-     b. 逐条采集笔记详情 + 评论
-     c. 统一保存数据（JSON + Excel）
-  5. 关键词之间随机延迟，模拟人类行为
+Full crawl flow:
+  1. Load the config (config/settings.yaml)
+  2. Initialize the browser (BrowserManager + anti-detection)
+  3. Make sure the login state is ready (reuse it or log in manually)
+  4. Loop over the keyword list:
+     a. Search → collect the list of note summaries
+     b. Collect each note's details + comments
+     c. Save all the data (JSON + Excel)
+  5. Random delay between keywords to mimic human behavior
 
-运行方式：
+Usage:
     uv run python main.py
 """
 
@@ -31,7 +31,7 @@ from src.note import fetch_note_details
 from src.search import search_notes
 from src.storage import Storage
 
-# ---- 日志配置 ----
+# ---- Logging setup ----
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
@@ -44,28 +44,28 @@ logger = logging.getLogger(__name__)
 
 
 def load_config(path: str = "config/settings.yaml") -> dict:
-    """加载 YAML 配置文件。
+    """Load the YAML config file.
 
     Args:
-        path: 配置文件路径（相对于项目根目录）
+        path: config file path (relative to the project root)
 
     Returns:
-        配置字典
+        The config dict
 
     Raises:
-        SystemExit: 配置文件不存在或解析失败时退出
+        SystemExit: exits if the config file is missing or cannot be parsed
     """
     config_path = Path(path)
     if not config_path.exists():
-        logger.error("配置文件不存在：%s", config_path)
+        logger.error("Config file not found: %s", config_path)
         sys.exit(1)
     try:
         with open(config_path, encoding="utf-8") as f:
             config = yaml.safe_load(f)
-        logger.info("配置文件加载成功：%s", config_path)
+        logger.info("Config file loaded: %s", config_path)
         return config
     except yaml.YAMLError as e:
-        logger.error("配置文件解析失败：%s", e)
+        logger.error("Failed to parse config file: %s", e)
         sys.exit(1)
 
 
@@ -76,17 +76,17 @@ async def crawl_keyword(
     delay_cfg: dict,
     storage: Storage,
 ) -> None:
-    """采集单个关键词的完整流程：搜索 → 详情 → 评论 → 存储。
+    """Full crawl flow for a single keyword: search → details → comments → storage.
 
     Args:
-        bm: 已初始化且登录的 BrowserManager 实例
-        keyword: 搜索关键词
-        crawler_cfg: settings.yaml 中的 crawler 节点
-        delay_cfg: settings.yaml 中的 delay 节点
-        storage: Storage 实例
+        bm: an initialized, logged-in BrowserManager instance
+        keyword: search keyword
+        crawler_cfg: the crawler section of settings.yaml
+        delay_cfg: the delay section of settings.yaml
+        storage: Storage instance
     """
     logger.info("=" * 60)
-    logger.info("开始采集关键词：%s", keyword)
+    logger.info("Starting crawl for keyword: %s", keyword)
     logger.info("=" * 60)
 
     max_notes = crawler_cfg.get("max_notes_per_keyword", 20)
@@ -95,8 +95,8 @@ async def crawl_keyword(
     scroll_interval = tuple(delay_cfg.get("scroll_interval", [1.0, 3.0]))
     between_notes = tuple(delay_cfg.get("between_notes", [2.0, 5.0]))
 
-    # ---- Step 1: 搜索 ----
-    logger.info("[Step 1/2] 搜索笔记列表（关键词：%s，目标：%d 条）", keyword, max_notes)
+    # ---- Step 1: Search ----
+    logger.info("[Step 1/2] Searching for notes (keyword: %s, target: %d)", keyword, max_notes)
     search_results = await search_notes(
         bm,
         keyword=keyword,
@@ -106,14 +106,14 @@ async def crawl_keyword(
     )
 
     if not search_results:
-        logger.warning("搜索结果为空，跳过当前关键词：%s", keyword)
+        logger.warning("No search results; skipping keyword: %s", keyword)
         return
 
-    logger.info("搜索完成：获得 %d 条笔记摘要", len(search_results))
+    logger.info("Search complete: got %d note summaries", len(search_results))
 
-    # ---- Step 2: 采集详情 + 评论 ----
+    # ---- Step 2: Collect details + comments ----
     logger.info(
-        "[Step 2/2] 批量采集笔记详情 + 评论（%d 条笔记，每条最多 %d 条评论）",
+        "[Step 2/2] Collecting note details + comments (%d notes, up to %d comments each)",
         len(search_results),
         max_comments,
     )
@@ -126,13 +126,13 @@ async def crawl_keyword(
         scroll_interval=scroll_interval,
     )
 
-    # ---- 保存数据（JSON + Excel） ----
+    # ---- Save the data (JSON + Excel) ----
     storage.save_all(keyword, search_results, note_details)
 
-    # 统计本次采集结果
+    # Tally the results of this crawl
     total_comments = sum(len(note.get("comments", [])) for note in note_details)
     logger.info(
-        "关键词 [%s] 采集完成：笔记 %d 条，评论 %d 条",
+        "Keyword [%s] done: %d notes, %d comments",
         keyword,
         len(note_details),
         total_comments,
@@ -140,7 +140,7 @@ async def crawl_keyword(
 
 
 async def main() -> None:
-    """主函数：加载配置 → 初始化 → 登录 → 遍历关键词采集。"""
+    """Main function: load config → initialize → log in → crawl each keyword."""
     config = load_config()
 
     crawler_cfg: dict = config.get("crawler", {})
@@ -150,30 +150,30 @@ async def main() -> None:
 
     keywords: list[str] = crawler_cfg.get("keywords", [])
     if not keywords:
-        logger.error("配置文件中未设置关键词（crawler.keywords），退出")
+        logger.error("No keywords set in the config file (crawler.keywords); exiting")
         sys.exit(1)
 
     between_searches = tuple(delay_cfg.get("between_searches", [3.0, 8.0]))
     headless: bool = browser_cfg.get("headless", False)
 
-    logger.info("小红书数据采集器启动")
-    logger.info("关键词列表（%d 个）：%s", len(keywords), keywords)
+    logger.info("rednote data crawler starting")
+    logger.info("Keywords (%d): %s", len(keywords), keywords)
 
-    # 初始化存储
+    # Initialize storage
     storage = Storage(storage_cfg)
 
-    # 初始化浏览器
+    # Initialize the browser
     async with BrowserManager(headless=headless) as bm:
-        # 确保登录态就绪
-        logger.info("检查登录状态...")
+        # Make sure the login state is ready
+        logger.info("Checking login status...")
         logged_in = await ensure_logged_in(bm)
         if not logged_in:
-            logger.error("登录失败，退出")
+            logger.error("Login failed; exiting")
             sys.exit(1)
 
-        logger.info("登录态就绪，开始采集流程")
+        logger.info("Login state ready; starting the crawl")
 
-        # 遍历关键词
+        # Loop over the keywords
         for idx, keyword in enumerate(keywords):
             try:
                 await crawl_keyword(
@@ -184,20 +184,20 @@ async def main() -> None:
                     storage=storage,
                 )
             except Exception as e:
-                logger.error("关键词 [%s] 采集异常：%s", keyword, e, exc_info=True)
+                logger.error("Keyword [%s] crawl failed: %s", keyword, e, exc_info=True)
 
-            # 关键词之间随机延迟（最后一个不需要）
+            # Random delay between keywords (not needed after the last one)
             if idx < len(keywords) - 1:
                 delay = random.uniform(*between_searches)
                 logger.info(
-                    "延迟 %.1f 秒后处理下一个关键词 [%s]...",
+                    "Waiting %.1f seconds before the next keyword [%s]...",
                     delay,
                     keywords[idx + 1],
                 )
                 await asyncio.sleep(delay)
 
     logger.info("=" * 60)
-    logger.info("所有关键词采集完成！共处理 %d 个关键词", len(keywords))
+    logger.info("All keywords crawled! Processed %d keywords", len(keywords))
     logger.info("=" * 60)
 
 

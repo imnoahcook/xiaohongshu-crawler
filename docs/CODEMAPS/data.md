@@ -13,7 +13,7 @@
     "author_id": str,        # extracted from profile URL
     "cover_url": str,
     "likes": int,            # normalized ("1.2万" → 12000)
-    "note_url": str,         # full URL
+    "note_url": str,         # full URL (https://www.rednote.com/explore/{id}?...)
     "note_type": "image" | "video",
     "publish_time": str,
 }
@@ -73,38 +73,34 @@ data/
 
 ### Excel Output (openpyxl)
 ```
-Sheet 1: "搜索结果" — 8 columns (search fields minus cover_url)
-Sheet 2: "笔记详情" — 13 columns (detail fields, tags joined, nested removed)
-Sheet 3: "评论数据" — 8 columns (all comments flattened)
+Sheet 1: "Search Results" — 8 columns (search fields minus cover_url)
+Sheet 2: "Note Details"   — 13 columns (detail fields, tags joined with ";", nested removed)
+Sheet 3: "Comments"       — 8 columns (all comments flattened)
 ```
 
 Excel features:
 - Frozen header row (row 1)
 - Auto-filter on all columns
-- Auto-width with Chinese character handling (×2.1 factor)
+- Auto-width with CJK character handling (×2.1 factor)
 - Filename sanitized (invalid chars removed)
 
 ### Field Mappings (Excel columns)
 
 ```
 _SEARCH_FIELDS = [
-    ("note_id", "笔记ID"), ("title", "标题"), ("author", "作者"),
-    ("author_id", "作者ID"), ("likes", "点赞数"), ("note_url", "链接"),
-    ("note_type", "类型"), ("publish_time", "发布时间"),
+    "note_id", "title", "author", "author_id",
+    "likes", "note_type", "note_url", "publish_time",
 ]
 
 _NOTE_FIELDS = [
-    ("note_id", "笔记ID"), ("title", "标题"), ("content", "正文"),
-    ("author", "作者"), ("author_id", "作者ID"), ("publish_time", "发布时间"),
-    ("likes", "点赞数"), ("collects", "收藏数"), ("comments_count", "评论数"),
-    ("shares", "分享数"), ("tags", "标签"), ("note_type", "类型"),
-    ("video_url", "视频链接"),
+    "note_id", "title", "content", "author", "author_id", "publish_time",
+    "likes", "collects", "comments_count", "shares", "tags",
+    "note_type", "note_url",
 ]
 
 _COMMENT_FIELDS = [
-    ("note_id", "所属笔记"), ("comment_id", "评论ID"), ("user_name", "用户名"),
-    ("user_id", "用户ID"), ("content", "评论内容"), ("likes", "点赞数"),
-    ("time", "时间"), ("ip_location", "IP属地"),
+    "comment_id", "note_id", "user_name", "user_id",
+    "content", "likes", "time", "ip_location",
 ]
 ```
 

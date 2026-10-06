@@ -1,22 +1,22 @@
 """
-数据存储模块
+Data storage module
 
-职责：
-  - 将采集结果持久化到本地文件
-  - 支持两种格式：JSON（原始完整数据）和 Excel（多 Sheet 表格）
-  - 按关键词和时间戳组织文件命名，避免覆盖
+Responsibilities:
+  - Persist the collected results to local files
+  - Support two formats: JSON (complete raw data) and Excel (multi-sheet workbook)
+  - Name files by keyword and timestamp to avoid overwriting
 
-目录结构：
+Directory layout:
     data/
     ├── raw/
-    │   ├── {keyword}_{timestamp}.json         # 搜索结果原始数据
-    │   └── notes_{keyword}_{timestamp}.json   # 笔记详情原始数据
+    │   ├── {keyword}_{timestamp}.json         # Raw search result data
+    │   └── notes_{keyword}_{timestamp}.json   # Raw note detail data
     └── processed/
-        └── {keyword}_{timestamp}.xlsx         # Excel 汇总（3 个 Sheet）
+        └── {keyword}_{timestamp}.xlsx         # Excel summary (3 sheets)
 
-用法：
+Usage:
     storage = Storage(config["storage"])
-    storage.save_all("Python教程", search_results, note_details)
+    storage.save_all("coffee", search_results, note_details)
 """
 
 from __future__ import annotations
@@ -31,7 +31,7 @@ from openpyxl.utils import get_column_letter
 
 logger = logging.getLogger(__name__)
 
-# Excel 各 Sheet 的列头定义
+# Column header definitions for each Excel sheet
 _SEARCH_FIELDS = [
     "note_id",
     "title",
@@ -70,21 +70,43 @@ _COMMENT_FIELDS = [
     "ip_location",
 ]
 
+# Display header for each field key
+_HEADER_LABELS = {
+    "note_id": "Note ID",
+    "title": "Title",
+    "content": "Content",
+    "author": "Author",
+    "author_id": "Author ID",
+    "publish_time": "Publish Time",
+    "likes": "Likes",
+    "collects": "Collects",
+    "comments_count": "Comment Count",
+    "shares": "Shares",
+    "tags": "Tags",
+    "note_type": "Note Type",
+    "note_url": "Note URL",
+    "comment_id": "Comment ID",
+    "user_name": "User",
+    "user_id": "User ID",
+    "time": "Time",
+    "ip_location": "IP Location",
+}
+
 
 class Storage:
-    """本地数据存储管理器。
+    """Local data storage manager.
 
-    根据配置决定是否写入 JSON / Excel，负责目录创建和文件命名。
+    Decides from the config whether to write JSON / Excel, and handles directory creation and file naming.
     """
 
     def __init__(self, config: dict) -> None:
-        """初始化存储配置。
+        """Initialise the storage config.
 
         Args:
-            config: settings.yaml 中 storage 节点的字典，包含：
-                - output_dir (str): 输出根目录，默认 "data"
-                - save_raw_json (bool): 是否保存原始 JSON
-                - save_xlsx (bool): 是否保存 Excel
+            config: Dict of the storage node in settings.yaml, containing:
+                - output_dir (str): Output root directory, default "data"
+                - save_raw_json (bool): Whether to save the raw JSON
+                - save_xlsx (bool): Whether to save the Excel file
         """
         self._root = Path(config.get("output_dir", "data"))
         self._save_json: bool = config.get("save_raw_json", True)
@@ -92,7 +114,7 @@ class Storage:
         self._ensure_dirs()
 
     def _ensure_dirs(self) -> None:
-        """确保输出目录存在。"""
+        """Make sure the output directories exist."""
         (self._root / "raw").mkdir(parents=True, exist_ok=True)
         (self._root / "processed").mkdir(parents=True, exist_ok=True)
 
@@ -102,29 +124,29 @@ class Storage:
         search_results: list[dict],
         note_details: list[dict],
     ) -> None:
-        """统一保存所有采集数据（JSON + Excel）。
+        """Save all collected data in one go (JSON + Excel).
 
         Args:
-            keyword: 搜索关键词（用于文件命名）
-            search_results: parse_search_card() 返回的字典列表
-            note_details: fetch_note_details() 返回的笔记详情列表，
-                          每条包含详情字段 + comments 子列表
+            keyword: Search keyword (used for file naming)
+            search_results: List of dicts returned by parse_search_card()
+            note_details: List of note details returned by fetch_note_details(),
+                          each containing the detail fields + a comments sub-list
         """
         safe_keyword = _sanitize_filename(keyword)
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 
-        # JSON 写入
+        # Write JSON
         if self._save_json:
             if search_results:
                 self._write_json(safe_keyword, timestamp, keyword, search_results)
             if note_details:
                 self._write_notes_json(safe_keyword, timestamp, keyword, note_details)
 
-        # Excel 写入
+        # Write Excel
         if self._save_xlsx:
             self._write_xlsx(safe_keyword, timestamp, search_results, note_details)
 
-    # ---- JSON 写入方法 ----
+    # ---- JSON writers ----
 
     def _write_json(
         self,
@@ -133,7 +155,7 @@ class Storage:
         keyword: str,
         results: list[dict],
     ) -> None:
-        """写入搜索结果 JSON 文件。"""
+        """Write the search results JSON file."""
         json_path = self._root / "raw" / f"{safe_keyword}_{timestamp}.json"
         payload = {
             "keyword": keyword,
@@ -143,7 +165,7 @@ class Storage:
         }
         with open(json_path, "w", encoding="utf-8") as f:
             json.dump(payload, f, ensure_ascii=False, indent=2)
-        logger.info("JSON 已写入：%s（%d 条）", json_path, len(results))
+        logger.info("JSON written: %s (%d items)", json_path, len(results))
 
     def _write_notes_json(
         self,
@@ -152,7 +174,7 @@ class Storage:
         keyword: str,
         note_details: list[dict],
     ) -> None:
-        """写入笔记详情 JSON 文件（含评论）。"""
+        """Write the note details JSON file (including comments)."""
         json_path = self._root / "raw" / f"notes_{safe_keyword}_{timestamp}.json"
         payload = {
             "keyword": keyword,
@@ -162,9 +184,9 @@ class Storage:
         }
         with open(json_path, "w", encoding="utf-8") as f:
             json.dump(payload, f, ensure_ascii=False, indent=2)
-        logger.info("笔记详情 JSON 已写入：%s（%d 条）", json_path, len(note_details))
+        logger.info("Note details JSON written: %s (%d items)", json_path, len(note_details))
 
-    # ---- Excel 写入方法 ----
+    # ---- Excel writers ----
 
     def _write_xlsx(
         self,
@@ -173,22 +195,22 @@ class Storage:
         search_results: list[dict],
         note_details: list[dict],
     ) -> None:
-        """生成包含 3 个 Sheet 的 Excel 文件。
+        """Generate an Excel file with 3 sheets.
 
-        Sheet 结构：
-          - 搜索结果：搜索阶段获取的笔记摘要
-          - 笔记详情：笔记正文、互动数据等
-          - 评论：所有笔记的评论汇总
+        Sheet layout:
+          - Search Results: note summaries obtained during the search phase
+          - Note Details: note body, engagement data, etc.
+          - Comments: comments from all notes combined
         """
         wb = Workbook()
 
-        # Sheet 1: 搜索结果
+        # Sheet 1: Search Results
         ws_search = wb.active
-        ws_search.title = "搜索结果"
+        ws_search.title = "Search Results"
         self._fill_sheet(ws_search, _SEARCH_FIELDS, search_results)
 
-        # Sheet 2: 笔记详情（tags 列表转字符串，移除嵌套字段）
-        ws_notes = wb.create_sheet("笔记详情")
+        # Sheet 2: Note Details (tags list joined into a string, nested fields removed)
+        ws_notes = wb.create_sheet("Note Details")
         note_rows = []
         for note in note_details:
             row = dict(note)
@@ -199,18 +221,18 @@ class Storage:
             note_rows.append(row)
         self._fill_sheet(ws_notes, _NOTE_FIELDS, note_rows)
 
-        # Sheet 3: 评论汇总
-        ws_comments = wb.create_sheet("评论")
+        # Sheet 3: Comments combined
+        ws_comments = wb.create_sheet("Comments")
         all_comments: list[dict] = []
         for note in note_details:
             all_comments.extend(note.get("comments", []))
         self._fill_sheet(ws_comments, _COMMENT_FIELDS, all_comments)
 
-        # 保存文件
+        # Save the file
         xlsx_path = self._root / "processed" / f"{safe_keyword}_{timestamp}.xlsx"
         wb.save(xlsx_path)
         logger.info(
-            "Excel 已写入：%s（搜索 %d 条 / 笔记 %d 条 / 评论 %d 条）",
+            "Excel written: %s (%d search results / %d notes / %d comments)",
             xlsx_path,
             len(search_results),
             len(note_details),
@@ -223,53 +245,54 @@ class Storage:
         fieldnames: list[str],
         rows: list[dict],
     ) -> None:
-        """填充单个 Sheet：写入表头 + 数据行 + 格式化。
+        """Fill a single sheet: write the header + data rows + formatting.
 
-        格式化包括：冻结首行、自动筛选、自适应列宽。
+        Formatting covers: frozen first row, auto-filter, auto-fitted column widths.
         """
-        # 写入表头
-        ws.append(fieldnames)
+        # Write the header
+        headers = [_HEADER_LABELS.get(field, field) for field in fieldnames]
+        ws.append(headers)
 
-        # 写入数据行
+        # Write the data rows
         for row in rows:
             ws.append([row.get(field) for field in fieldnames])
 
-        # 冻结首行（滚动时表头始终可见）
+        # Freeze the first row (header stays visible while scrolling)
         ws.freeze_panes = "A2"
 
-        # 自动筛选（覆盖所有数据列）
+        # Auto-filter (covers all data columns)
         if rows:
             last_col = get_column_letter(len(fieldnames))
-            last_row = len(rows) + 1  # +1 表头行
+            last_row = len(rows) + 1  # +1 for the header row
             ws.auto_filter.ref = f"A1:{last_col}{last_row}"
 
-        # 自适应列宽（基于表头和内容的最大长度）
+        # Auto-fit column widths (based on the longest of the header and the content)
         for col_idx, field in enumerate(fieldnames, start=1):
-            # 计算该列最大字符宽度（表头 + 前 100 行数据取样）
-            max_len = len(str(field))
+            # Compute the column's maximum character width (header + a sample of the first 100 data rows)
+            max_len = len(headers[col_idx - 1])
             for row in rows[:100]:
                 val = row.get(field)
                 if val is not None:
-                    # 中文字符按 2 倍宽度计算
+                    # Non-ASCII (e.g. CJK) characters count as double width
                     cell_len = sum(2 if ord(c) > 127 else 1 for c in str(val))
                     max_len = max(max_len, cell_len)
-            # 限制最大列宽为 60，最小为 10
+            # Cap the column width at 60, with a minimum of 10
             col_width = min(max(max_len + 2, 10), 60)
             ws.column_dimensions[get_column_letter(col_idx)].width = col_width
 
 
 def _sanitize_filename(name: str) -> str:
-    """将字符串转化为安全的文件名（去除 / \\ : * ? " < > | 等特殊字符）。
+    """Turn a string into a safe filename (strips special characters such as / \\ : * ? " < > |).
 
     Args:
-        name: 原始字符串
+        name: The original string
 
     Returns:
-        安全的文件名字符串（保留中文、字母、数字、下划线、连字符）
+        A safe filename string (CJK characters, letters, digits, underscores and hyphens are kept)
     """
     import re
-    # 替换不安全字符为下划线
+    # Replace unsafe characters with underscores
     safe = re.sub(r'[\\/:*?"<>|\s]', "_", name)
-    # 合并连续下划线
+    # Collapse consecutive underscores
     safe = re.sub(r"_+", "_", safe)
     return safe.strip("_") or "unnamed"

@@ -1,11 +1,11 @@
 """
-CrawlerSession Phase B 方法测试
+Tests for CrawlerSession Phase B methods
 
-测试 B1/B3 后端：search_notes 和 get_note_detail 方法
+Tests the B1/B3 backend: the search_notes and get_note_detail methods
 
-测试策略：
-  - BrowserManager 和 src 模块均 mock，不依赖真实浏览器
-  - 覆盖：浏览器未运行时的错误返回、正常调用路径、参数透传
+Test strategy:
+  - BrowserManager and the src modules are mocked; no real browser is needed
+  - Covers: error responses when the browser is not running, the normal call path, argument passthrough
 """
 
 from __future__ import annotations
@@ -18,20 +18,20 @@ from src.session import CrawlerSession
 
 
 class TestCrawlerSessionSearchNotes:
-    """测试 CrawlerSession.search_notes() 方法。"""
+    """Tests for the CrawlerSession.search_notes() method."""
 
     async def test_returns_error_dict_when_not_running(self):
-        """浏览器未启动时应返回含 error=True 的字典，不抛出异常。"""
+        """Should return a dict with error=True when the browser is not running, without raising."""
         session = CrawlerSession()
-        result = await session.search_notes("测试关键词")
+        result = await session.search_notes("test-keyword")
 
         assert isinstance(result, dict)
         assert result.get("error") is True
         assert "message" in result
 
     async def test_calls_search_module_with_correct_args(self):
-        """应将 keyword 和 max_count 正确传入 src.search.search_notes。"""
-        mock_results = [{"note_id": "1", "title": "笔记一"}, {"note_id": "2", "title": "笔记二"}]
+        """Should pass keyword and max_count correctly to src.search.search_notes."""
+        mock_results = [{"note_id": "1", "title": "Note one"}, {"note_id": "2", "title": "Note two"}]
 
         with patch("src.session.BrowserManager") as MockBM:
             with patch("src.search.search_notes", new=AsyncMock(return_value=mock_results)) as mock_search:
@@ -50,10 +50,10 @@ class TestCrawlerSessionSearchNotes:
                 assert result["results"] == mock_results
 
     async def test_returns_structured_response_keys(self):
-        """返回值必须包含 keyword / count / results 三个键。"""
+        """The return value must contain the keys keyword / count / results."""
         with patch("src.session.BrowserManager") as MockBM:
             with patch("src.search.search_notes", new=AsyncMock(return_value=[])):
-                # Phase D: 空结果时会检测登录态，mock 为已登录以获得正常空响应
+                # Phase D: login status is checked on empty results; mock as logged in to get a normal empty response
                 with patch("src.session.is_logged_in", new=AsyncMock(return_value=True)):
                     mock_bm = AsyncMock()
                     MockBM.return_value = mock_bm
@@ -70,7 +70,7 @@ class TestCrawlerSessionSearchNotes:
                     assert "results" in result
 
     async def test_uses_browser_lock_during_search(self):
-        """搜索期间应持有 browser lock（通过 _lock 串行化）。"""
+        """The browser lock should be held during the search (serialized via _lock)."""
         lock_acquired_during_search = False
 
         with patch("src.session.BrowserManager") as MockBM:
@@ -85,7 +85,7 @@ class TestCrawlerSessionSearchNotes:
 
                 async def check_lock(*args, **kwargs):
                     nonlocal lock_acquired_during_search
-                    # 尝试立即获取锁（应该失败，因为 search_notes 持有锁）
+                    # Try to acquire the lock immediately (should fail because search_notes holds it)
                     lock_acquired_during_search = session._lock.locked()
                     return []
 
@@ -95,7 +95,7 @@ class TestCrawlerSessionSearchNotes:
                 assert lock_acquired_during_search is True
 
     async def test_default_max_count_is_20(self):
-        """默认 max_count 应为 20。"""
+        """The default max_count should be 20."""
         with patch("src.session.BrowserManager") as MockBM:
             with patch("src.search.search_notes", new=AsyncMock(return_value=[])) as mock_search:
                 mock_bm = AsyncMock()
@@ -112,24 +112,24 @@ class TestCrawlerSessionSearchNotes:
 
 
 class TestCrawlerSessionSearchNotesRaceCondition:
-    """测试 search_notes 的竞态条件二次防护路径。"""
+    """Tests the second-guard path for race conditions in search_notes."""
 
     async def test_returns_error_when_bm_is_none_despite_running_flag(self):
-        """_running=True 但 _bm=None 时（stop() 竞态），应返回 error dict。
+        """Should return an error dict when _running=True but _bm=None (stop() race).
 
-        Phase D: _ensure_browser() 会尝试自动恢复，需 mock BrowserManager
-        使恢复也失败，验证最终返回 BROWSER_CRASHED 错误。
+        Phase D: _ensure_browser() attempts automatic recovery, so BrowserManager must be mocked
+        to make recovery fail too, verifying that a BROWSER_CRASHED error is returned in the end.
         """
         with patch("src.session.BrowserManager") as MockBM:
-            # 恢复也失败
+            # Recovery fails too
             mock_bm = AsyncMock()
-            mock_bm.__aenter__ = AsyncMock(side_effect=RuntimeError("恢复失败"))
+            mock_bm.__aenter__ = AsyncMock(side_effect=RuntimeError("recovery failed"))
             mock_bm.__aexit__ = AsyncMock(return_value=None)
             MockBM.return_value = mock_bm
 
             session = CrawlerSession()
-            session._running = True  # 绕过快速路径
-            session._bm = None       # 模拟 stop() 已将 _bm 置空
+            session._running = True  # Bypass the fast path
+            session._bm = None       # Simulate stop() having already set _bm to None
 
             result = await session.search_notes("test")
 
@@ -139,13 +139,13 @@ class TestCrawlerSessionSearchNotesRaceCondition:
 
 
 class TestCrawlerSessionGetNoteDetailRaceCondition:
-    """测试 get_note_detail 的竞态条件二次防护路径。"""
+    """Tests the second-guard path for race conditions in get_note_detail."""
 
     async def test_returns_error_when_bm_is_none_despite_running_flag(self):
-        """_running=True 但 _bm=None 时（stop() 竞态），应返回 error dict。"""
+        """Should return an error dict when _running=True but _bm=None (stop() race)."""
         with patch("src.session.BrowserManager") as MockBM:
             mock_bm = AsyncMock()
-            mock_bm.__aenter__ = AsyncMock(side_effect=RuntimeError("恢复失败"))
+            mock_bm.__aenter__ = AsyncMock(side_effect=RuntimeError("recovery failed"))
             mock_bm.__aexit__ = AsyncMock(return_value=None)
             MockBM.return_value = mock_bm
 
@@ -153,7 +153,7 @@ class TestCrawlerSessionGetNoteDetailRaceCondition:
             session._running = True
             session._bm = None
 
-            result = await session.get_note_detail("https://www.xiaohongshu.com/explore/abc123")
+            result = await session.get_note_detail("https://www.rednote.com/explore/abc123")
 
             assert isinstance(result, dict)
             assert result.get("error") is True
@@ -161,21 +161,21 @@ class TestCrawlerSessionGetNoteDetailRaceCondition:
 
 
 class TestCrawlerSessionGetNoteDetail:
-    """测试 CrawlerSession.get_note_detail() 方法。"""
+    """Tests for the CrawlerSession.get_note_detail() method."""
 
     async def test_returns_error_dict_when_not_running(self):
-        """浏览器未启动时应返回含 error=True 的字典，不抛出异常。"""
+        """Should return a dict with error=True when the browser is not running, without raising."""
         session = CrawlerSession()
-        result = await session.get_note_detail("https://www.xiaohongshu.com/explore/abc123")
+        result = await session.get_note_detail("https://www.rednote.com/explore/abc123")
 
         assert isinstance(result, dict)
         assert result.get("error") is True
         assert "message" in result
 
     async def test_calls_fetch_single_note_with_correct_args(self):
-        """应将 note_url 和 max_comments 正确传入 src.note.fetch_single_note。"""
-        mock_detail = {"note_id": "abc123", "title": "测试笔记", "comments": []}
-        note_url = "https://www.xiaohongshu.com/explore/abc123?xsec_token=xyz"
+        """Should pass note_url and max_comments correctly to src.note.fetch_single_note."""
+        mock_detail = {"note_id": "abc123", "title": "Test note", "comments": []}
+        note_url = "https://www.rednote.com/explore/abc123?xsec_token=xyz"
 
         with patch("src.session.BrowserManager") as MockBM:
             with patch("src.note.fetch_single_note", new=AsyncMock(return_value=mock_detail)) as mock_fetch:
@@ -192,8 +192,8 @@ class TestCrawlerSessionGetNoteDetail:
                 assert result == mock_detail
 
     async def test_returns_error_dict_when_fetch_returns_none(self):
-        """fetch_single_note 返回 None 时应包装为 error dict，而非透传 None。"""
-        note_url = "https://www.xiaohongshu.com/explore/abc123"
+        """When fetch_single_note returns None, it should be wrapped as an error dict rather than passing None through."""
+        note_url = "https://www.rednote.com/explore/abc123"
 
         with patch("src.session.BrowserManager") as MockBM:
             with patch("src.note.fetch_single_note", new=AsyncMock(return_value=None)):
@@ -211,8 +211,8 @@ class TestCrawlerSessionGetNoteDetail:
                 assert "message" in result
 
     async def test_default_max_comments_is_20(self):
-        """默认 max_comments 应为 20。"""
-        note_url = "https://www.xiaohongshu.com/explore/abc123"
+        """The default max_comments should be 20."""
+        note_url = "https://www.rednote.com/explore/abc123"
 
         with patch("src.session.BrowserManager") as MockBM:
             with patch("src.note.fetch_single_note", new=AsyncMock(return_value={})) as mock_fetch:
@@ -229,9 +229,9 @@ class TestCrawlerSessionGetNoteDetail:
                 assert call_kwargs["max_comments"] == 20
 
     async def test_uses_browser_lock_during_fetch(self):
-        """采集笔记期间应持有 browser lock。"""
+        """The browser lock should be held while crawling a note."""
         lock_acquired = False
-        note_url = "https://www.xiaohongshu.com/explore/abc123"
+        note_url = "https://www.rednote.com/explore/abc123"
 
         with patch("src.session.BrowserManager") as MockBM:
             with patch("src.note.fetch_single_note") as mock_fetch:

@@ -1,11 +1,11 @@
 """
-comment 模块单元测试
+Unit tests for the comment module
 
-测试策略：
-  - Playwright Page 全部使用 AsyncMock 模拟，不依赖真实浏览器
-  - asyncio.sleep 打补丁为 no-op，避免测试延迟
-  - parse_comment 打补丁隔离 parser 依赖
-  - 覆盖：fetch_comments、_detect_comment_selector、_scroll_comments
+Test strategy:
+  - Playwright Page is fully mocked with AsyncMock; no real browser needed
+  - asyncio.sleep is patched to a no-op to avoid test delays
+  - parse_comment is patched to isolate the parser dependency
+  - Coverage: fetch_comments, _detect_comment_selector, _scroll_comments
 """
 
 from __future__ import annotations
@@ -19,7 +19,7 @@ from src.comment import _detect_comment_selector, _scroll_comments, fetch_commen
 
 
 # ============================================================
-# 辅助函数
+# Helpers
 # ============================================================
 
 
@@ -27,11 +27,11 @@ def _make_page(
     selector_elements: dict | None = None,
     all_elements: dict | None = None,
 ) -> AsyncMock:
-    """创建通用模拟 Page。
+    """Create a general-purpose mock Page.
 
     Args:
-        selector_elements: sel → element 的映射（query_selector）
-        all_elements: sel → [element, ...] 的映射（query_selector_all）
+        selector_elements: mapping of sel → element (query_selector)
+        all_elements: mapping of sel → [element, ...] (query_selector_all)
     """
     page = AsyncMock()
     selector_elements = selector_elements or {}
@@ -59,10 +59,10 @@ def _make_page(
 
 
 class TestDetectCommentSelector:
-    """测试评论选择器检测逻辑。"""
+    """Test comment selector detection logic."""
 
     async def test_returns_first_matching_selector(self):
-        """第一个有元素的选择器应被返回。"""
+        """The first selector with elements should be returned."""
         el = AsyncMock()
         page = AsyncMock()
         page.wait_for_selector = AsyncMock(return_value=None)
@@ -74,19 +74,19 @@ class TestDetectCommentSelector:
         assert isinstance(result, str)
 
     async def test_skips_empty_selector(self):
-        """有匹配元素的才返回（空列表跳过，非空才命中）。"""
+        """Only a selector with matching elements is returned (empty lists are skipped)."""
         el = AsyncMock()
         call_count = 0
 
         page = AsyncMock()
 
         async def wait_for_selector(sel, *, timeout=None):
-            pass  # 不抛出
+            pass  # does not raise
 
         async def qsa(sel):
             nonlocal call_count
             call_count += 1
-            # 第一次调用返回空（跳过），第二次返回有元素
+            # First call returns empty (skipped), second returns elements
             return [] if call_count == 1 else [el]
 
         page.wait_for_selector = AsyncMock(side_effect=wait_for_selector)
@@ -98,7 +98,7 @@ class TestDetectCommentSelector:
         assert call_count >= 2
 
     async def test_returns_none_when_all_selectors_timeout(self):
-        """所有选择器超时时应返回 None。"""
+        """Should return None when every selector times out."""
         page = AsyncMock()
         page.wait_for_selector = AsyncMock(
             side_effect=PlaywrightTimeoutError("timeout")
@@ -109,7 +109,7 @@ class TestDetectCommentSelector:
         assert result is None
 
     async def test_returns_none_on_exception(self):
-        """选择器抛出非超时异常时应继续尝试并最终返回 None。"""
+        """Should keep trying on non-timeout exceptions and finally return None."""
         page = AsyncMock()
         page.wait_for_selector = AsyncMock(
             side_effect=Exception("unexpected")
@@ -126,10 +126,10 @@ class TestDetectCommentSelector:
 
 
 class TestScrollComments:
-    """测试评论区滚动逻辑。"""
+    """Test comment section scrolling logic."""
 
     async def test_stops_immediately_when_count_met(self):
-        """当前评论数已达目标时，不应执行滚动。"""
+        """Should not scroll when the current comment count already meets the target."""
         el = AsyncMock()
         page = AsyncMock()
         page.query_selector_all = AsyncMock(return_value=[el] * 5)
@@ -149,12 +149,12 @@ class TestScrollComments:
         page.mouse.wheel.assert_not_called()
 
     async def test_scrolls_using_scroller_element(self):
-        """找到可滚动容器时应通过容器滚动而非 mouse.wheel。"""
+        """Should scroll via the container rather than mouse.wheel when a scrollable container is found."""
         el = AsyncMock()
         scroller = AsyncMock()
         scroller.evaluate = AsyncMock()
 
-        counts = [0, 5]  # 第一次 0，第二次 5 → 满足目标
+        counts = [0, 5]  # first 0, then 5 → target met
         call_idx = 0
 
         async def qsa(sel):
@@ -189,7 +189,7 @@ class TestScrollComments:
         page.mouse.wheel.assert_not_called()
 
     async def test_falls_back_to_mouse_wheel_when_no_scroller(self):
-        """找不到滚动容器时应回退到 mouse.wheel 滚动。"""
+        """Should fall back to mouse.wheel scrolling when no scroll container is found."""
         counts = [0, 5]
         call_idx = 0
 
@@ -201,7 +201,7 @@ class TestScrollComments:
 
         page = AsyncMock()
         page.query_selector_all = AsyncMock(side_effect=qsa)
-        page.query_selector = AsyncMock(return_value=None)  # 无滚动容器
+        page.query_selector = AsyncMock(return_value=None)  # no scroll container
         page.mouse = AsyncMock()
         page.mouse.wheel = AsyncMock()
 
@@ -217,15 +217,15 @@ class TestScrollComments:
         page.mouse.wheel.assert_called()
 
     async def test_stops_after_stale_rounds(self):
-        """连续无新增评论达到阈值时应停止滚动。"""
+        """Should stop scrolling once consecutive rounds without new comments hit the threshold."""
         page = AsyncMock()
-        page.query_selector_all = AsyncMock(return_value=[])  # 始终为空
+        page.query_selector_all = AsyncMock(return_value=[])  # always empty
         page.query_selector = AsyncMock(return_value=None)
         page.mouse = AsyncMock()
         page.mouse.wheel = AsyncMock()
 
         with patch("asyncio.sleep", new=AsyncMock()):
-            # 目标 10 但始终为 0，应在 stale_rounds=3 后停止
+            # Target is 10 but the count stays 0; should stop after stale_rounds=3
             await _scroll_comments(
                 page,
                 item_selector=".comment-item",
@@ -234,7 +234,7 @@ class TestScrollComments:
                 scroll_interval=(0.0, 0.0),
             )
 
-        # 至少进行了滚动（不会无限循环）
+        # Scrolled at least once (and did not loop forever)
         assert page.mouse.wheel.call_count >= 1
 
 
@@ -244,10 +244,10 @@ class TestScrollComments:
 
 
 class TestFetchComments:
-    """测试 fetch_comments 公共接口。"""
+    """Test the fetch_comments public interface."""
 
     async def test_returns_empty_when_no_selector_found(self):
-        """未找到评论选择器时应返回空列表。"""
+        """Should return an empty list when no comment selector is found."""
         page = AsyncMock()
         page.wait_for_selector = AsyncMock(
             side_effect=PlaywrightTimeoutError("timeout")
@@ -258,16 +258,16 @@ class TestFetchComments:
         assert result == []
 
     async def test_returns_parsed_comments(self):
-        """成功解析时应返回评论列表。"""
+        """Should return the comment list when parsing succeeds."""
         el1 = AsyncMock()
         el2 = AsyncMock()
-        mock_comment1 = {"comment_id": "c1", "content": "评论1"}
-        mock_comment2 = {"comment_id": "c2", "content": "评论2"}
+        mock_comment1 = {"comment_id": "c1", "content": "Comment 1"}
+        mock_comment2 = {"comment_id": "c2", "content": "Comment 2"}
 
         page = AsyncMock()
 
         async def wait_for_selector(sel, *, timeout=None):
-            pass  # 不超时
+            pass  # does not time out
 
         page.wait_for_selector = AsyncMock(side_effect=wait_for_selector)
         page.query_selector_all = AsyncMock(return_value=[el1, el2])
@@ -285,7 +285,7 @@ class TestFetchComments:
         assert result[0]["comment_id"] == "c1"
 
     async def test_skips_failed_comments(self):
-        """解析返回 None 的评论应被跳过。"""
+        """Comments whose parse returns None should be skipped."""
         el = AsyncMock()
         page = AsyncMock()
 
@@ -307,7 +307,7 @@ class TestFetchComments:
         assert result == []
 
     async def test_respects_max_count(self):
-        """最多返回 max_count 条评论。"""
+        """Should return at most max_count comments."""
         els = [AsyncMock() for _ in range(10)]
         page = AsyncMock()
 

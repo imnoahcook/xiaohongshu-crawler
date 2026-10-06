@@ -31,12 +31,13 @@
 | random | main.py, search.py, note.py, comment.py | Human-like delays |
 | datetime | storage.py | Timestamps |
 | urllib.parse | search.py | URL encoding |
+| os | site.py | `REDNOTE_BASE_URL` env override |
 
 ## External Services
 
 | Service | URL | Purpose |
 |---------|-----|---------|
-| Xiaohongshu | xiaohongshu.com | Target crawl site |
+| rednote | https://www.rednote.com | Target crawl site (override with `REDNOTE_BASE_URL`) |
 | bot.sannysoft.com | bot.sannysoft.com | Anti-detection validation (scripts only) |
 
 ## No Database / No API Server / No Message Queue

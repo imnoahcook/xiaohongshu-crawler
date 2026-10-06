@@ -1,11 +1,11 @@
 """
-search 模块单元测试
+Unit tests for the search module
 
-测试策略：
-  - BrowserManager 使用 AsyncMock 模拟，不依赖真实浏览器
-  - asyncio.sleep 打补丁为 no-op，避免测试延迟
-  - parse_search_card 打补丁隔离 parser 依赖
-  - 覆盖：search_notes、_detect_card_selector、_scroll_to_load
+Test strategy:
+  - BrowserManager is mocked with AsyncMock, with no dependency on a real browser
+  - asyncio.sleep is patched to a no-op to avoid test delays
+  - parse_search_card is patched to isolate the parser dependency
+  - Covers: search_notes, _detect_card_selector, _scroll_to_load
 """
 
 from __future__ import annotations
@@ -19,12 +19,12 @@ from src.search import _detect_card_selector, _scroll_to_load, search_notes
 
 
 # ============================================================
-# 辅助函数
+# Helpers
 # ============================================================
 
 
 def _make_bm(page: AsyncMock | None = None) -> AsyncMock:
-    """创建模拟 BrowserManager，new_page() 返回指定的 page mock。"""
+    """Create a mock BrowserManager whose new_page() returns the given page mock."""
     bm = AsyncMock()
     bm.new_page = AsyncMock(return_value=page or AsyncMock())
     return bm
@@ -34,11 +34,11 @@ def _make_page(
     qsa_results: dict | None = None,
     goto_raises: Exception | None = None,
 ) -> AsyncMock:
-    """创建通用模拟 Page。
+    """Create a general-purpose mock Page.
 
     Args:
-        qsa_results: sel → [element, ...] 的映射
-        goto_raises: 若设置，goto() 会抛出该异常
+        qsa_results: Mapping of sel → [element, ...]
+        goto_raises: If set, goto() raises this exception
     """
     page = AsyncMock()
     qsa_results = qsa_results or {}
@@ -68,10 +68,10 @@ def _make_page(
 
 
 class TestDetectCardSelector:
-    """测试搜索卡片选择器检测。"""
+    """Tests for search card selector detection."""
 
     async def test_returns_selector_with_elements(self):
-        """有元素的选择器应被返回。"""
+        """A selector that has elements should be returned."""
         el = AsyncMock()
         page = AsyncMock()
         page.wait_for_selector = AsyncMock(return_value=None)
@@ -82,7 +82,7 @@ class TestDetectCardSelector:
         assert result is not None
 
     async def test_returns_none_when_all_timeout(self):
-        """所有选择器超时时应返回 None。"""
+        """Should return None when all selectors time out."""
         page = AsyncMock()
         page.wait_for_selector = AsyncMock(
             side_effect=PlaywrightTimeoutError("timeout")
@@ -93,7 +93,7 @@ class TestDetectCardSelector:
         assert result is None
 
     async def test_returns_none_on_exception(self):
-        """选择器抛出异常时应继续尝试并最终返回 None。"""
+        """Should keep trying when a selector raises and eventually return None."""
         page = AsyncMock()
         page.wait_for_selector = AsyncMock(side_effect=Exception("unexpected"))
 
@@ -102,7 +102,7 @@ class TestDetectCardSelector:
         assert result is None
 
     async def test_skips_selector_with_zero_elements(self):
-        """有匹配元素（非空）才返回，空列表跳过。"""
+        """Only returned when there are matching elements (non-empty); empty lists are skipped."""
         el = AsyncMock()
         call_count = 0
 
@@ -127,10 +127,10 @@ class TestDetectCardSelector:
 
 
 class TestScrollToLoad:
-    """测试瀑布流加载滚动逻辑。"""
+    """Tests for the waterfall feed scroll-loading logic."""
 
     async def test_stops_immediately_when_count_met(self):
-        """当前卡片数已达目标时不执行滚动。"""
+        """No scrolling when the current card count already meets the target."""
         page = AsyncMock()
         page.query_selector_all = AsyncMock(return_value=[AsyncMock()] * 5)
         page.mouse = AsyncMock()
@@ -148,7 +148,7 @@ class TestScrollToLoad:
         page.mouse.wheel.assert_not_called()
 
     async def test_stops_after_stale_rounds(self):
-        """连续无新增卡片达到阈值时停止。"""
+        """Stops when consecutive rounds with no new cards reach the threshold."""
         page = AsyncMock()
         page.query_selector_all = AsyncMock(return_value=[])
         page.mouse = AsyncMock()
@@ -166,8 +166,8 @@ class TestScrollToLoad:
         assert page.mouse.wheel.call_count >= 1
 
     async def test_resets_stale_count_when_new_cards_appear(self):
-        """出现新卡片时 stale_rounds 应重置。"""
-        counts = [0, 3, 3, 3]  # 第二轮有增长，之后停滞
+        """stale_rounds should reset when new cards appear."""
+        counts = [0, 3, 3, 3]  # Growth in the second round, then stagnation
         call_idx = 0
 
         async def qsa(sel):
@@ -199,10 +199,10 @@ class TestScrollToLoad:
 
 
 class TestSearchNotes:
-    """测试 search_notes 公共接口。"""
+    """Tests for the search_notes public interface."""
 
     async def test_returns_empty_when_no_selector_found(self):
-        """找不到卡片选择器时应返回空列表。"""
+        """Should return an empty list when no card selector is found."""
         page = AsyncMock()
         page.goto = AsyncMock()
         page.wait_for_selector = AsyncMock(
@@ -224,7 +224,7 @@ class TestSearchNotes:
         assert result == []
 
     async def test_returns_parsed_cards(self):
-        """找到卡片并成功解析时应返回结果列表。"""
+        """Should return the result list when cards are found and parsed successfully."""
         el = AsyncMock()
         page = AsyncMock()
         page.goto = AsyncMock()
@@ -236,7 +236,7 @@ class TestSearchNotes:
 
         bm = _make_bm(page)
 
-        mock_card = {"note_id": "n1", "title": "测试"}
+        mock_card = {"note_id": "n1", "title": "Test"}
 
         with (
             patch("src.search.parse_search_card", return_value=mock_card),
@@ -253,7 +253,7 @@ class TestSearchNotes:
         assert len(result) == 2
 
     async def test_skips_failed_cards(self):
-        """parse_search_card 返回 None 的卡片应被跳过。"""
+        """Cards for which parse_search_card returns None should be skipped."""
         el = AsyncMock()
         page = AsyncMock()
         page.goto = AsyncMock()
@@ -280,7 +280,7 @@ class TestSearchNotes:
         assert result == []
 
     async def test_returns_empty_on_timeout(self):
-        """页面加载超时时应返回空列表。"""
+        """Should return an empty list when the page load times out."""
         page = AsyncMock()
         page.goto = AsyncMock(side_effect=PlaywrightTimeoutError("timeout"))
         page.close = AsyncMock()
@@ -292,7 +292,7 @@ class TestSearchNotes:
         assert result == []
 
     async def test_returns_empty_on_general_exception(self):
-        """其他异常时应返回空列表。"""
+        """Should return an empty list on any other exception."""
         page = AsyncMock()
         page.goto = AsyncMock(side_effect=Exception("network error"))
         page.close = AsyncMock()
@@ -304,7 +304,7 @@ class TestSearchNotes:
         assert result == []
 
     async def test_closes_page_even_on_error(self):
-        """无论成功或失败，page.close() 都应被调用。"""
+        """page.close() should be called whether it succeeds or fails."""
         page = AsyncMock()
         page.goto = AsyncMock(side_effect=Exception("error"))
         page.close = AsyncMock()
@@ -316,7 +316,7 @@ class TestSearchNotes:
         page.close.assert_called_once()
 
     async def test_respects_max_count(self):
-        """最多返回 max_count 条结果。"""
+        """Returns at most max_count results."""
         els = [AsyncMock() for _ in range(10)]
         page = AsyncMock()
         page.goto = AsyncMock()
@@ -328,7 +328,7 @@ class TestSearchNotes:
 
         bm = _make_bm(page)
 
-        mock_card = {"note_id": "n1", "title": "测试"}
+        mock_card = {"note_id": "n1", "title": "Test"}
 
         with (
             patch("src.search.parse_search_card", return_value=mock_card),

@@ -1,9 +1,9 @@
 """
-反检测配置模块
+Anti-detection configuration module
 
-集成 playwright-stealth 和 browserforge，提供双层反检测能力：
-  Layer 1 (环境层) — playwright-stealth：消除 navigator.webdriver 等自动化痕迹
-  Layer 2 (指纹层) — browserforge：生成与真实浏览器一致的指纹
+Integrates playwright-stealth and browserforge for two layers of anti-detection:
+  Layer 1 (environment) — playwright-stealth: removes automation traces such as navigator.webdriver
+  Layer 2 (fingerprint) — browserforge: generates fingerprints consistent with a real browser
 """
 
 from __future__ import annotations
@@ -17,7 +17,7 @@ if TYPE_CHECKING:
     from playwright.async_api import BrowserContext, Page
 
 
-# Chrome 120+ 的指纹与 Playwright 1.58 使用的 Chromium 145 接近，兼容性最佳
+# Chrome 120+ fingerprints are close to the Chromium 145 used by Playwright 1.58, giving the best compatibility
 _fingerprint_generator = FingerprintGenerator(
     browser=Browser(name="chrome", min_version=120),
     os="macos",
@@ -25,24 +25,24 @@ _fingerprint_generator = FingerprintGenerator(
 
 
 def build_stealth(user_agent: str) -> Stealth:
-    """根据指纹 UA 构建 Stealth 实例，覆盖默认的 Win32 平台为 MacIntel。"""
+    """Build a Stealth instance from the fingerprint UA, overriding the default Win32 platform with MacIntel."""
     return Stealth(
-        # 保持所有默认的补丁开启
+        # Keep all default patches enabled
         navigator_platform_override="MacIntel",
         navigator_user_agent_override=user_agent,
         navigator_vendor_override="Google Inc.",
-        # 关闭 chrome_runtime 补丁：headed 模式下 Chrome Runtime 本就存在，无需伪装
+        # Disable the chrome_runtime patch: in headed mode Chrome Runtime already exists, so there is nothing to fake
         chrome_runtime=False,
     )
 
 
 def generate_context_options() -> dict:
-    """生成包含真实浏览器指纹的 browser context 配置。
+    """Generate browser context options containing a realistic browser fingerprint.
 
-    每次调用都会随机生成新的指纹，避免指纹固化被关联追踪。
+    Each call generates a new random fingerprint so a fixed fingerprint cannot be linked and tracked.
 
     Returns:
-        可直接传入 browser.new_context(**options) 的参数字典。
+        A dict of arguments that can be passed straight to browser.new_context(**options).
     """
     fp = _fingerprint_generator.generate()
 
@@ -56,14 +56,13 @@ def generate_context_options() -> dict:
             "width": fp.screen.width,
             "height": fp.screen.height,
         },
-        "locale": fp.navigator.language or "zh-CN",
-        "timezone_id": "Asia/Shanghai",
+        "locale": fp.navigator.language or "en-US",
         "color_scheme": "light",
-        # 返回指纹本身供 Stealth 构建时复用 UA
+        # Return the fingerprint itself so the UA can be reused when building Stealth
         "_fingerprint": fp,
     }
 
 
 async def apply_stealth_to_page(page: "Page", stealth: Stealth) -> None:
-    """对单个页面应用 stealth 补丁（每个新页面都需调用）。"""
+    """Apply the stealth patches to a single page (must be called for every new page)."""
     await stealth.apply_stealth_async(page)

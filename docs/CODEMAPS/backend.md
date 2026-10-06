@@ -17,10 +17,19 @@ main() → None  # asyncio entry
 
 ## Core Modules
 
+### src/site.py (20 lines) — Target site configuration
+```python
+BASE_URL     # os.environ["REDNOTE_BASE_URL"], default "https://www.rednote.com"
+HOME_URL     # BASE_URL
+EXPLORE_URL  # f"{BASE_URL}/explore"
+SEARCH_URL   # BASE_URL + "/search_result?keyword={keyword}&type=51"
+```
+Override example: `REDNOTE_BASE_URL=https://www.xiaohongshu.com` (serves the same web app)
+
 ### src/stealth.py (69 lines) — Fingerprint & anti-detection
 ```python
 build_stealth(user_agent: str) → Stealth
-generate_context_options() → dict          # viewport, UA, locale
+generate_context_options() → dict          # viewport, UA, locale (fallback en-US); no timezone pin
 apply_stealth_to_page(page, stealth) → None
 ```
 
@@ -39,10 +48,11 @@ Constants: `AUTH_STATE_PATH = Path("auth_state/state.json")`
 ### src/auth.py (126 lines) — Login management
 ```python
 is_logged_in(page) → bool                  # checks login-btn selector
-wait_for_manual_login(page) → bool          # 120s timeout
+wait_for_manual_login(page) → bool          # 300s timeout
 ensure_logged_in(bm) → bool                # restore or prompt
 ```
-Constants: `REDNOTE_HOME`, `_LOGIN_BTN_SELECTOR`, `LOGIN_WAIT_TIMEOUT = 120`
+Constants: `REDNOTE_HOME`, `REDNOTE_LOGIN` (from `src/site.py`), `_LOGIN_BTN_SELECTOR`, `LOGIN_WAIT_TIMEOUT = 300`
+Manual login on rednote.com: QR-code scan with the rednote app, or phone number + SMS code
 
 ### src/search.py (201 lines) — Search collection
 ```python
@@ -60,6 +70,7 @@ _wait_for_content(page) → None
 ```
 Flow: `for each note → goto URL → wait render → parse detail → fetch comments`
 Retry: up to `_MAX_RETRIES = 2`
+Accepted note URLs: `/explore/{id}`, `/discovery/item/{id}`, `/search_result/{id}`
 
 ### src/comment.py (185 lines) — Comment collection
 ```python
@@ -86,7 +97,7 @@ class Storage:
     __init__(config: dict)
     save_all(keyword, search_results, note_details) → None
 ```
-Output: JSON (raw/) + Excel 3-sheet workbook (processed/)
+Output: JSON (raw/) + Excel 3-sheet workbook (processed/) — sheets "Search Results", "Note Details", "Comments"
 
 ## Pipeline Chain
 

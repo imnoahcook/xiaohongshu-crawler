@@ -1,1 +1,1 @@
-"""pytest 公共配置。"""
+"""Shared pytest configuration."""
