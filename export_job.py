@@ -287,8 +287,9 @@ class ExportJob:
             else:
                 failures = 0
                 await asyncio.sleep(random.uniform(*_SEARCH_DELAY))
-                if after_each is not None:
-                    await after_each()
+                if after_each is not None and await after_each() is False:
+                    logger.error("Note fetching stopped; leaving the remaining searches for a rerun")
+                    return False
         return True
 
     # ---------- Stage 2: note details ----------
@@ -501,9 +502,9 @@ class ExportJob:
             if self.interleave:
                 state = {"ok": True}
 
-                async def fetch_batch() -> None:
-                    if state["ok"]:
-                        state["ok"] = await self.run_notes(page, self.per_query)
+                async def fetch_batch() -> bool:
+                    state["ok"] = await self.run_notes(page, self.per_query)
+                    return state["ok"]
 
                 searches_finished = await self.run_searches(page, after_each=fetch_batch)
                 if not state["ok"]:
