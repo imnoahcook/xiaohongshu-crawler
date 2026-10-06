@@ -6,8 +6,8 @@ Responsibilities:
   - Keep the rednote login available across runs
 
 Two modes, selected with the REDNOTE_BROWSER environment variable:
-  - "stealth" (default): launch a dedicated Chromium with a generated fingerprint
-    and stealth patches. The login is saved to auth_state/state.json and reloaded
+  - "stealth" (default): launch a dedicated Chromium with stealth patches and a
+    generated fingerprint that is saved and reused across launches. The login is saved to auth_state/state.json and reloaded
     on the next start. Set REDNOTE_HEADLESS=1 to hide the window.
   - "chrome": attach over CDP to the Chrome the user already has open and work in
     new tabs there (see src/chrome.py). Chrome asks the user to allow each new
@@ -21,6 +21,7 @@ Usage:
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 from pathlib import Path
@@ -41,9 +42,27 @@ from src.stealth import apply_stealth_to_page, build_stealth, generate_context_o
 logger = logging.getLogger(__name__)
 
 AUTH_STATE_PATH = Path(__file__).resolve().parent.parent / "auth_state" / "state.json"
+FINGERPRINT_PATH = AUTH_STATE_PATH.with_name("fingerprint.json")
 
 # Chrome shows an "Allow remote debugging?" prompt on connect; leave time to click it
 _CONNECT_TIMEOUT_MS = 120_000
+
+
+def _stable_context_options() -> dict:
+    """Return the browser fingerprint, generating it only the first time.
+
+    The fingerprint (user agent, screen size, locale) is saved next to the login
+    state and reused on every launch, so the site sees the same device each time
+    the saved login is used. Delete auth_state/fingerprint.json to get a new one.
+    """
+    if FINGERPRINT_PATH.exists():
+        return json.loads(FINGERPRINT_PATH.read_text())
+    options = generate_context_options()
+    options.pop("_fingerprint")
+    FINGERPRINT_PATH.parent.mkdir(parents=True, exist_ok=True)
+    FINGERPRINT_PATH.write_text(json.dumps(options, indent=2))
+    logger.info("Generated a new browser fingerprint: %s", FINGERPRINT_PATH)
+    return options
 
 
 def _attach_to_chrome() -> bool:
@@ -90,10 +109,8 @@ class BrowserManager:
 
     async def _launch(self) -> None:
         headless = os.environ.get("REDNOTE_HEADLESS", "") not in ("", "0")
-        # One fingerprint per launch, so it stays consistent within a session
-        context_options = generate_context_options()
-        fingerprint = context_options.pop("_fingerprint")
-        self._stealth = build_stealth(fingerprint.navigator.userAgent)
+        context_options = _stable_context_options()
+        self._stealth = build_stealth(context_options["user_agent"])
 
         self._browser = await self._playwright.chromium.launch(
             headless=headless,

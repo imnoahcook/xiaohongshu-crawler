@@ -26,6 +26,8 @@ Plan file (JSON):
       "sorts": ["general", "most_saved"],        (also: newest, most_liked, most_commented)
       "max_comments": 20,
       "min_collected": 0,
+      "interleave": false,
+      "workers": 1,
       "categories": [{"category": "Food", "phase": 1, "queries": ["..."]}]
     }
 
@@ -101,8 +103,12 @@ _SORTS = {
     "most_saved": (re.compile(r"^\s*(最多收藏|most (saved|collected|favou?rited))\s*$", re.I), "collect_descending"),
 }
 
-_SEARCH_DELAY = (4.0, 9.0)
-_NOTE_DELAY = (4.0, 9.0)
+_SEARCH_DELAY = (10.0, 20.0)
+# After a failed search, wait this long before the next one (seconds). rednote
+# blocks search for a while after a burst of queries; pushing on only extends it.
+_SEARCH_BACKOFF = 300
+_MAX_CONSECUTIVE_SEARCH_FAILURES = 3
+_NOTE_DELAY = (4.0, 8.0)
 _MAX_SCROLL_ROUNDS = 8
 _MAX_CONSECUTIVE_FAILURES = 4
 _NOTE_READY_SECONDS = 15
@@ -130,6 +136,11 @@ class ExportJob:
         self.sorts: list[str] = plan.get("sorts", ["general"])
         self.max_comments: int = plan.get("max_comments", 20)
         self.min_collected: int = plan.get("min_collected", 0)
+        # Fetch each search's notes before running the next search. Searches then
+        # happen minutes apart, which avoids the block a burst of searches triggers.
+        self.interleave: bool = plan.get("interleave", False)
+        # Number of tabs fetching notes at the same time
+        self.workers: int = plan.get("workers", 1)
 
         self.queries_path = out_dir / "queries.json"
         self.index_path = out_dir / "search_index.json"
@@ -138,6 +149,8 @@ class ExportJob:
 
         self.query_log: list[dict] = _read_json(self.queries_path, [])
         self.index: dict[str, dict] = _read_json(self.index_path, {})
+        # note id → comment API pages seen while that note's page is open
+        self._comment_pages: dict[str, list[dict]] = {}
 
     # ---------- Stage 1: searches ----------
 
@@ -230,11 +243,26 @@ class ExportJob:
                 )
         except Exception as e:
             entry["error"] = f"{type(e).__name__}: {e}".splitlines()[0]
+            entry["page_text"] = await self._page_text(page)
         return entry
 
-    async def run_searches(self, page: Page) -> None:
+    @staticmethod
+    async def _page_text(page: Page) -> str:
+        """What the page shows, to tell a block or captcha apart from an empty result."""
+        try:
+            return (await page.evaluate("document.body.innerText"))[:300]
+        except Exception:
+            return ""
+
+    async def run_searches(self, page: Page, after_each=None) -> bool:
+        """Run pending searches. Returns False if search looks blocked and the stage gave up.
+
+        Args:
+            after_each: optional coroutine function awaited after every successful search
+        """
         pending = [s for s in self._planned_searches() if not self._search_done(s)]
         logger.info("Stage 1: %d searches to run", len(pending))
+        failures = 0
         for i, search in enumerate(pending, start=1):
             entry = await self._run_search(page, search)
             # A rerun replaces the earlier failed attempt
@@ -249,7 +277,19 @@ class ExportJob:
                 i, len(pending), search["query"], search["sort"], entry["returned"],
                 f" — ERROR {entry['error']}" if entry["error"] else "",
             )
-            await asyncio.sleep(random.uniform(*_SEARCH_DELAY))
+            if entry["error"]:
+                failures += 1
+                if failures >= _MAX_CONSECUTIVE_SEARCH_FAILURES:
+                    logger.error("%d searches in a row failed; search looks blocked, leaving the rest for a rerun", failures)
+                    return False
+                logger.info("Backing off %d seconds before the next search", _SEARCH_BACKOFF)
+                await asyncio.sleep(_SEARCH_BACKOFF)
+            else:
+                failures = 0
+                await asyncio.sleep(random.uniform(*_SEARCH_DELAY))
+                if after_each is not None:
+                    await after_each()
+        return True
 
     # ---------- Stage 2: note details ----------
 
@@ -381,56 +421,88 @@ class ExportJob:
     async def run_notes(self, page: Page, limit: int | None = None) -> bool:
         """Fetch pending notes. Returns False if the job stopped early on repeated failures."""
         pending = self._pending_notes()[:limit]
-        logger.info("Stage 2: %d notes to fetch", len(pending))
+        total = len(pending)
+        logger.info("Stage 2: %d notes to fetch", total)
 
-        comment_pages: dict[str, list[dict]] = {}
+        # Extra tabs for the other workers; the first worker uses the job's own tab
+        pages = [page]
+        for _ in range(min(self.workers, total) - 1):
+            extra = await page.context.new_page()
+            extra.on("response", self._on_response)
+            pages.append(extra)
 
-        async def on_response(response: Response) -> None:
-            if _COMMENT_PAGE_PATH not in response.url:
-                return
-            note_id = parse_qs(urlparse(response.url).query).get("note_id", [""])[0]
-            if note_id not in comment_pages:
-                return
-            try:
-                comment_pages[note_id].append((await response.json()).get("data") or {})
-            except Exception:
-                pass
+        queue = list(enumerate(pending, start=1))
+        state = {"failures": 0, "stopped": False}
 
-        page.on("response", on_response)
+        async def worker(tab: Page) -> None:
+            while queue and not state["stopped"]:
+                number, note_id = queue.pop(0)
+                try:
+                    record = await self._fetch_note(tab, note_id, self._comment_pages)
+                except Exception as e:
+                    logger.warning("Note %s failed: %s", note_id, f"{type(e).__name__}: {e}".splitlines()[0])
+                    record = None
+                self._comment_pages.pop(note_id, None)
 
-        failures = 0
-        for i, note_id in enumerate(pending, start=1):
-            try:
-                record = await self._fetch_note(page, note_id, comment_pages)
-            except Exception as e:
-                logger.warning("Note %s failed: %s", note_id, f"{type(e).__name__}: {e}".splitlines()[0])
-                record = None
-            comment_pages.pop(note_id, None)
+                if record is None:
+                    state["failures"] += 1
+                    if state["failures"] >= _MAX_CONSECUTIVE_FAILURES:
+                        logger.error(
+                            "%d notes in a row failed; stopping to keep the account safe", state["failures"]
+                        )
+                        state["stopped"] = True
+                else:
+                    state["failures"] = 0
+                    with self.notes_path.open("a") as f:
+                        f.write(json.dumps(record, ensure_ascii=False) + "\n")
+                    logger.info(
+                        "[note %d/%d] %s — saved %d, %d images, %d comments",
+                        number, total, record["title"][:30], record["collected"],
+                        len(record["images"]), len(record["top_comments"]),
+                    )
+                await asyncio.sleep(random.uniform(*_NOTE_DELAY))
 
-            if record is None:
-                failures += 1
-                if failures >= _MAX_CONSECUTIVE_FAILURES:
-                    logger.error("%d notes in a row failed; stopping to keep the account safe", failures)
-                    return False
-            else:
-                failures = 0
-                with self.notes_path.open("a") as f:
-                    f.write(json.dumps(record, ensure_ascii=False) + "\n")
-                logger.info(
-                    "[note %d/%d] %s — saved %d, %d images, %d comments",
-                    i, len(pending), record["title"][:30], record["collected"],
-                    len(record["images"]), len(record["top_comments"]),
-                )
-            await asyncio.sleep(random.uniform(*_NOTE_DELAY))
-        return True
+        try:
+            await asyncio.gather(*(worker(tab) for tab in pages))
+        finally:
+            for extra in pages[1:]:
+                if not extra.is_closed():
+                    await extra.close()
+        return not state["stopped"]
+
+    async def _on_response(self, response: Response) -> None:
+        """Collect the comment API responses of the note currently being fetched."""
+        if _COMMENT_PAGE_PATH not in response.url:
+            return
+        note_id = parse_qs(urlparse(response.url).query).get("note_id", [""])[0]
+        if note_id not in self._comment_pages:
+            return
+        try:
+            self._comment_pages[note_id].append((await response.json()).get("data") or {})
+        except Exception:
+            pass
 
     async def run_in(self, bm: BrowserManager, limit_notes: int | None = None) -> bool:
         """Run the job in a new tab of an already attached browser."""
         self.out_dir.mkdir(parents=True, exist_ok=True)
         page = await bm.new_page()
+        page.on("response", self._on_response)
         try:
-            await self.run_searches(page)
-            return await self.run_notes(page, limit_notes)
+            if self.interleave:
+                state = {"ok": True}
+
+                async def fetch_batch() -> None:
+                    if state["ok"]:
+                        state["ok"] = await self.run_notes(page, self.per_query)
+
+                searches_finished = await self.run_searches(page, after_each=fetch_batch)
+                if not state["ok"]:
+                    return False
+            else:
+                searches_finished = await self.run_searches(page)
+            # Notes from the searches that did work are still fetched
+            notes_finished = await self.run_notes(page, limit_notes)
+            return searches_finished and notes_finished
         finally:
             if not page.is_closed():
                 await page.close()
