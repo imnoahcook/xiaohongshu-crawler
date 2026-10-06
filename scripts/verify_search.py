@@ -15,7 +15,7 @@ Examples:
     uv run python scripts/verify_search.py "coffee"         # Specify a keyword
 
 Prerequisites:
-    - Login completed (auth_state/state.json exists)
+    - Login completed to rednote in your everyday Chrome
     - If not logged in, first run: uv run python scripts/verify_login.py
 """
 
@@ -60,15 +60,9 @@ async def run(keyword: str) -> bool:
     print(f"  Target count: {VERIFY_MAX_COUNT}")
     print()
 
-    # ---- Step 1: Check the login state ----
-    auth_state = Path("auth_state/state.json")
-    if not auth_state.exists():
-        print("  ✗ Login state file not found, please run verify_login.py to log in first")
-        return False
-
     # ---- Step 2: Run the search collection ----
     results: list[dict] = []
-    async with BrowserManager(headless=False) as bm:
+    async with BrowserManager() as bm:
         print("[1/3] Verifying login state...")
         page = await bm.new_page()
         logged_in = await is_logged_in(page)
@@ -129,7 +123,6 @@ async def run(keyword: str) -> bool:
         print("    1. The card selectors are out of date (rednote page redesign)")
         print("    2. A network problem prevented the page from loading properly")
         print("    3. A broken login state caused a redirect")
-        print("    Suggestion: inspect the page DOM structure manually in headless=False mode")
     print()
 
     return passed

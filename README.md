@@ -2,7 +2,7 @@
 
 A data collection framework and MCP server for [rednote.com](https://www.rednote.com), the international web frontend of Xiaohongshu (RED).
 
-It drives a real browser with Playwright, keeps you logged in between runs, and exposes search, note detail and comment collection both as a CLI pipeline and as MCP tools that AI assistants (Claude Desktop / Claude Code / Cursor) can call directly.
+It works inside the Chrome you already have open, in new tabs, using your existing rednote login, and exposes search, note detail and comment collection both as a CLI pipeline and as MCP tools that AI assistants (Claude Desktop / Claude Code / Cursor) can call directly.
 
 This is an English-language fork of [yangsijie666/xiaohongshu-crawler](https://github.com/yangsijie666/xiaohongshu-crawler), retargeted from xiaohongshu.com to rednote.com.
 
@@ -13,21 +13,30 @@ This is an English-language fork of [yangsijie666/xiaohongshu-crawler](https://g
 - Keyword search with infinite-scroll loading
 - Note details: title, body, engagement counts, tags, images / video
 - Comments: top N comments with user info and IP location
-- Browser fingerprinting via playwright-stealth + browserforge
-- Persistent login state: log in once, later runs reuse the saved session
+- Uses your everyday Chrome: no separate browser, no separate login, nothing to keep in sync
+- Background daemon that stays attached to Chrome, with a small CLI (`rednote.py`)
 - Output: raw JSON plus a 3-sheet Excel workbook
-- Timeouts, automatic browser crash recovery, and login-expiry detection
+- Timeouts, automatic reconnection, and login-expiry detection
+
+## How it connects to Chrome
+
+The crawler never launches a browser. It attaches to your running Google Chrome over the DevTools protocol, opens its own tabs there, and closes only those tabs when it is done.
+
+One-time setup: open `chrome://inspect/#remote-debugging` in Chrome and turn on **Allow remote debugging for this browser instance**.
+
+Chrome asks you to **Allow** each new debugging connection. To see that prompt only once, use the daemon: `rednote.py start` attaches once and stays attached in the background, and every later command goes through it.
 
 ## What needs a login
 
-rednote.com only shows the home explore feed to logged-out visitors. Search results, note detail pages and comments all redirect to the login page, so everything except `scripts/verify_guest_feed.py` needs a logged-in session.
+rednote.com only shows the home explore feed to logged-out visitors. Search results, note detail pages and comments all redirect to the login page.
 
-Login is done by you, in the browser window the crawler opens: scan the QR code with the rednote app, or use a phone number and SMS code. The session is saved to `auth_state/state.json` (gitignored).
+If you are already logged in to rednote.com in Chrome, there is nothing to do. Otherwise `scripts/verify_login.py` opens the login page in a tab and waits while you scan the QR code with the rednote app or use a phone number and SMS code.
 
 ## Requirements
 
 - Python 3.10+
 - [uv](https://docs.astral.sh/uv/)
+- Google Chrome, running, with remote debugging allowed (see above)
 
 ## Quick start
 
@@ -38,18 +47,25 @@ git clone https://github.com/imnoahcook/xiaohongshu-crawler.git && cd xiaohongsh
 # 2. Install dependencies
 uv sync
 
-# 3. Install the browser
-uv run playwright install chromium
+# 3. Start the background daemon (click "Allow" in Chrome once)
+uv run python rednote.py start
 
-# 4. Smoke test against the live site (no login needed)
-uv run python scripts/verify_guest_feed.py
+# 4. Check the daemon and your rednote login
+uv run python rednote.py status
 
-# 5. Log in once (QR code or phone number)
-uv run python scripts/verify_login.py
+# 5. Use it
+uv run python rednote.py search coffee -n 10
+uv run python rednote.py note "https://www.rednote.com/explore/<id>?xsec_token=..."
+uv run python rednote.py crawl coffee -n 5      # search → details → comments → data/
+uv run python rednote.py saved
 
-# 6. Run the full pipeline
-uv run python main.py
+# 6. Detach when you are done
+uv run python rednote.py stop
 ```
+
+The daemon is the MCP server below running over HTTP on `127.0.0.1:8765` (change the port with `REDNOTE_DAEMON_PORT`); its log is `logs/daemon.log`.
+
+`uv run python main.py` runs the keywords in `config/settings.yaml` without the daemon; it attaches to Chrome directly, so it prompts once per run.
 
 ## MCP server
 
@@ -108,13 +124,15 @@ uv run python mcp_server.py --transport streamable-http --host 0.0.0.0 --port 80
 | Command | Description |
 |---------|-------------|
 | `uv sync` | Install / sync dependencies |
-| `uv run playwright install chromium` | Install Chromium |
-| `uv run python main.py` | Run the full collection pipeline |
+| `uv run python rednote.py start` / `stop` | Start / stop the background daemon |
+| `uv run python rednote.py status` | Check the daemon and the rednote login |
+| `uv run python rednote.py search <keyword>` | Search notes |
+| `uv run python rednote.py note <url>` | One note's details and comments |
+| `uv run python rednote.py crawl <keyword>` | Full pipeline, saved to `data/` |
+| `uv run python main.py` | Run the pipeline for the configured keywords |
 | `uv run python mcp_server.py` | Start the MCP server (stdio) |
-| `uv run python mcp_server.py --transport sse` | Start the MCP server (SSE) |
-| `uv run python scripts/verify_guest_feed.py` | Live smoke test, no login needed |
-| `uv run python scripts/verify_login.py` | Log in and save the session |
-| `uv run python scripts/verify_stealth.py` | Check the browser fingerprint |
+| `uv run python scripts/verify_guest_feed.py` | Live smoke test of the home feed |
+| `uv run python scripts/verify_login.py` | Check the login, or wait for you to log in |
 | `uv run python scripts/verify_search.py` | Verify search collection |
 | `uv run python scripts/verify_note.py` | Verify note detail + comment collection |
 | `uv run pytest --cov` | Run tests with coverage |
@@ -132,7 +150,6 @@ Edit `config/settings.yaml`:
 | `crawler.page_load_timeout` | `30` | Page load timeout (seconds) |
 | `delay.between_notes` | `[2, 5]` | Random delay range between notes (seconds) |
 | `delay.between_searches` | `[3, 8]` | Random delay range between searches (seconds) |
-| `browser.headless` | `false` | Headless mode |
 | `storage.output_dir` | `"data"` | Output directory |
 | `storage.save_raw_json` | `true` | Save raw JSON |
 | `storage.save_xlsx` | `true` | Save Excel |
@@ -145,7 +162,7 @@ The crawler targets `https://www.rednote.com` by default. xiaohongshu.com serves
 REDNOTE_BASE_URL=https://www.xiaohongshu.com uv run python main.py
 ```
 
-Sessions are per-site: log in again after switching.
+Logins are per-site: you need to be logged in to that site in Chrome.
 
 ## Output
 
@@ -166,15 +183,16 @@ Engagement counts are normalised to integers whatever format the site renders th
 ## Project structure
 
 ```
+rednote.py             # CLI client + background daemon control
 mcp_server.py          # MCP server entry point (stdio / SSE / HTTP)
 main.py                # CLI pipeline entry point
 src/
 ├── site.py            # Target site URLs (REDNOTE_BASE_URL)
-├── session.py         # MCP session (browser lifecycle + concurrency lock)
+├── chrome.py          # Finds the running Chrome's DevTools endpoint
+├── session.py         # MCP session (Chrome connection + concurrency lock)
 ├── errors.py          # Unified error format
-├── stealth.py         # Fingerprint generation + stealth patches
-├── browser.py         # Playwright browser lifecycle
-├── auth.py            # Login & session persistence
+├── browser.py         # Attaches Playwright to Chrome, manages the crawler's tabs
+├── auth.py            # Login detection & guided login
 ├── search.py          # Search collection (infinite scroll)
 ├── note.py            # Note detail collection (with retries)
 ├── comment.py         # Comment collection (top N)
@@ -189,9 +207,7 @@ tests/                 # Test suite
 
 | Package | Purpose |
 |---------|---------|
-| playwright | Browser automation (async API) |
-| playwright-stealth | Stealth patches |
-| browserforge | Browser fingerprint generation |
+| playwright | Drives Chrome over CDP (async API) |
 | mcp[cli] | MCP protocol SDK |
 | uvicorn | ASGI server (SSE / HTTP transports) |
 | starlette | ASGI framework (SSE / HTTP transports) |
@@ -200,7 +216,7 @@ tests/                 # Test suite
 
 ## Responsible use
 
-Use this with your own account, keep the default delays and modest volumes, and respect rednote's terms of service and the privacy of the people whose posts and comments you collect.
+This runs in your own browser with your own account, so what it does is attributable to you. Use it keep the default delays and modest volumes, and respect rednote's terms of service and the privacy of the people whose posts and comments you collect.
 
 ## License
 

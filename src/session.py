@@ -15,7 +15,7 @@ Differences from BrowserManager:
     with its lifecycle managed manually via start()/stop()
 
 Usage:
-    session = CrawlerSession(headless=True)
+    session = CrawlerSession()
     await session.start()
     result = await session.check_login_status()
     async with session.browser_lock() as bm:
@@ -89,18 +89,15 @@ class CrawlerSession:
     Design constraints:
       - Only one CrawlerSession instance should be running at a time (the caller is responsible for this)
       - All browser operations must run serially through the browser_lock() context manager
-      - Defaults to headless=True in MCP stdio mode to save resources
       - Automatically attempts recovery once when the browser crashes (Phase D)
       - Checks login status when an operation fails and returns a precise error code (Phase D)
     """
 
-    def __init__(self, headless: bool = True) -> None:
-        """Initialize the session (does not start the browser).
-
-        Args:
-            headless: Whether to run headless. Defaults to True for the MCP server; set to False when debugging.
-        """
-        self._headless = headless
+    def __init__(self) -> None:
+        """Initialize the session (does not connect to the browser)."""
+        # Serializes start(): concurrent callers must share one Chrome connection attempt,
+        # because every attempt makes Chrome show its "Allow remote debugging?" prompt
+        self._start_lock = asyncio.Lock()
         self._bm: Optional[BrowserManager] = None
         self._exit_stack: Optional[contextlib.AsyncExitStack] = None
         self._running: bool = False
@@ -120,19 +117,20 @@ class CrawlerSession:
         Raises:
             Exception: Propagated as-is when the browser fails to start
         """
-        if self._running:
-            logger.debug("Browser session already running; skipping duplicate start")
-            return
+        async with self._start_lock:
+            if self._running:
+                logger.debug("Browser session already running; skipping duplicate start")
+                return
 
-        logger.info("Starting MCP browser session (headless=%s)", self._headless)
-        exit_stack = contextlib.AsyncExitStack()
-        # enter_async_context calls __aenter__ internally; exit_stack cleans up automatically on failure
-        bm = await exit_stack.enter_async_context(BrowserManager(headless=self._headless))
-        # Assign only after everything succeeds, so stop() always deals with complete state
-        self._exit_stack = exit_stack
-        self._bm = bm
-        self._running = True
-        logger.info("MCP browser session started")
+            logger.info("Starting MCP browser session")
+            exit_stack = contextlib.AsyncExitStack()
+            # enter_async_context calls __aenter__ internally; exit_stack cleans up automatically on failure
+            bm = await exit_stack.enter_async_context(BrowserManager())
+            # Assign only after everything succeeds, so stop() always deals with complete state
+            self._exit_stack = exit_stack
+            self._bm = bm
+            self._running = True
+            logger.info("MCP browser session started")
 
     async def stop(self) -> None:
         """Close the browser and release all resources (idempotent: safe to call when not running)."""
@@ -354,9 +352,8 @@ class CrawlerSession:
                     message = "Logged in; crawling features are available."
                 else:
                     message = (
-                        "Not logged in. Run "
-                        "`uv run python scripts/verify_login.py` in a terminal to log in, "
-                        "then restart the MCP server."
+                        "Not logged in. Log in to rednote.com in your Chrome "
+                        "(QR code or phone number), then retry."
                     )
                 return {
                     "logged_in": logged_in,

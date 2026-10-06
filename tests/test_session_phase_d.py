@@ -242,7 +242,7 @@ class TestLoginDetection:
 
                     assert result["error"] is True
                     assert result["code"] == "LOGIN_EXPIRED"
-                    assert "verify_login" in result["action"]
+                    assert "Log in" in result["action"]
 
     async def test_search_returns_normal_empty_when_logged_in(self):
         """Logged in but no search results: returns a normal empty result (no false LOGIN_EXPIRED)."""

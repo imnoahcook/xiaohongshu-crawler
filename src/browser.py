@@ -2,13 +2,16 @@
 Browser management module
 
 Responsibilities:
-  - Manage the lifecycle of the Playwright browser instance
-  - Integrate stealth anti-detection (fingerprint injection + stealth patches)
-  - Manage the browser context and saving/loading the login state
+  - Attach Playwright to the Chrome the user already has open (see src/chrome.py)
+  - Open the crawler's tabs in that Chrome's default context, so they share the
+    user's existing rednote login
   - Provide a single async context manager interface
 
+The crawler never launches or closes a browser. On exit it closes only the tabs
+it opened; the Chrome window and every other tab are left alone.
+
 Usage:
-    async with BrowserManager(headless=False) as bm:
+    async with BrowserManager() as bm:
         page = await bm.new_page()
         # ... crawling logic
 """
@@ -16,94 +19,67 @@ Usage:
 from __future__ import annotations
 
 import logging
-from pathlib import Path
 from typing import Optional
 
 from playwright.async_api import (
     Browser,
     BrowserContext,
+    Error as PlaywrightError,
     Page,
     Playwright,
     async_playwright,
 )
 
-from src.stealth import apply_stealth_to_page, build_stealth, generate_context_options
+from src.chrome import ChromeNotAvailableError, devtools_ws_url
 
 logger = logging.getLogger(__name__)
 
-AUTH_STATE_PATH = Path("auth_state/state.json")
+# Chrome shows an "Allow remote debugging?" prompt on connect; leave time to click it
+_CONNECT_TIMEOUT_MS = 60_000
 
 
 class BrowserManager:
-    """Playwright browser lifecycle manager (async context manager).
+    """Connection to the user's everyday Chrome (async context manager)."""
 
-    Each instance generates a new browser fingerprint so the fingerprint never becomes fixed.
-    """
-
-    def __init__(self, headless: bool = False) -> None:
-        self.headless = headless
+    def __init__(self) -> None:
         self._playwright: Optional[Playwright] = None
         self._browser: Optional[Browser] = None
         self._context: Optional[BrowserContext] = None
-
-        # Generate the fingerprint at construction time so it stays consistent within one session
-        ctx_opts = generate_context_options()
-        self._fingerprint = ctx_opts.pop("_fingerprint")
-        self._context_options = ctx_opts
-        self._stealth = build_stealth(self._fingerprint.navigator.userAgent)
+        self._pages: list[Page] = []
 
     async def __aenter__(self) -> "BrowserManager":
+        ws_url = devtools_ws_url()
         self._playwright = await async_playwright().start()
-        self._browser = await self._playwright.chromium.launch(
-            headless=self.headless,
-            args=[
-                "--no-sandbox",
-                "--disable-blink-features=AutomationControlled",
-            ],
-        )
-        logger.info("Browser started (headless=%s)", self.headless)
-        await self._create_context()
+        try:
+            self._browser = await self._playwright.chromium.connect_over_cdp(
+                ws_url, timeout=_CONNECT_TIMEOUT_MS
+            )
+        except PlaywrightError as e:
+            await self._playwright.stop()
+            raise ChromeNotAvailableError(
+                f"Could not connect to Chrome at {ws_url}. Make sure Chrome is running "
+                'and click "Allow" on its remote debugging prompt.'
+            ) from e
+
+        # The default context is the user's own profile, with their cookies and logins
+        self._context = self._browser.contexts[0]
+        logger.info("Attached to Chrome at %s", ws_url)
         return self
 
     async def __aexit__(self, *_args) -> None:
-        if self._context:
-            await self._context.close()
-        if self._browser:
-            await self._browser.close()
+        # Close only the tabs this manager opened; Chrome itself stays open
+        for page in self._pages:
+            if not page.is_closed():
+                await page.close()
         if self._playwright:
             await self._playwright.stop()
-        logger.info("Browser closed")
-
-    async def _create_context(self) -> None:
-        """Create a browser context with the fingerprint injected, loading the saved login state if one exists."""
-        if AUTH_STATE_PATH.exists():
-            logger.info("Login state file found, loading: %s", AUTH_STATE_PATH)
-            self._context = await self._browser.new_context(
-                **self._context_options,
-                storage_state=str(AUTH_STATE_PATH),
-            )
-        else:
-            self._context = await self._browser.new_context(**self._context_options)
-
-        # Stealth patches: applied automatically to every page opened later in this context
-        self._context.on("page", self._on_new_page)
-
-    async def _on_new_page(self, page: Page) -> None:
-        """Apply the stealth patches automatically when a new page opens in the context."""
-        await apply_stealth_to_page(page, self._stealth)
+        logger.info("Detached from Chrome (window left open)")
 
     async def new_page(self) -> Page:
-        """Create and return a new page with the stealth patches applied."""
+        """Open and return a new tab in the user's Chrome."""
         page = await self._context.new_page()
-        # The on("page") event only fires for context.new_page(); apply again explicitly here to be sure
-        await apply_stealth_to_page(page, self._stealth)
+        self._pages.append(page)
         return page
-
-    async def save_state(self) -> None:
-        """Save the current context's cookies / localStorage to a file (persists the login state)."""
-        AUTH_STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
-        await self._context.storage_state(path=str(AUTH_STATE_PATH))
-        logger.info("Login state saved: %s", AUTH_STATE_PATH)
 
     @property
     def context(self) -> Optional[BrowserContext]:

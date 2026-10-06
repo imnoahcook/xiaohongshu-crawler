@@ -16,7 +16,7 @@ Examples:
     uv run python scripts/verify_e2e.py "coffee"         # specify a keyword
 
 Prerequisites:
-    - Already logged in (auth_state/state.json exists)
+    - Already logged in to rednote in your everyday Chrome
     - If not logged in, first run: uv run python scripts/verify_login.py
 """
 
@@ -139,15 +139,9 @@ async def run(keyword: str) -> bool:
           f"up to {VERIFY_CRAWLER_CFG['max_comments_per_note']} comments each")
     print()
 
-    # ---- Step 1: Check the login state file ----
-    auth_state = Path("auth_state/state.json")
-    if not auth_state.exists():
-        print("  ✗ Login state file not found; run verify_login.py to log in first")
-        return False
-
     crawl_success = False
 
-    async with BrowserManager(headless=False) as bm:
+    async with BrowserManager() as bm:
         # ---- Step 2: Verify the login state is valid ----
         print("[1/3] Verifying login state...")
         page = await bm.new_page()
@@ -266,7 +260,6 @@ async def run(keyword: str) -> bool:
     else:
         print(f"  ✗ Phase 4 end-to-end verification failed")
         print("    Check the detailed log output for the failed items above")
-        print("    Tip: watch the browser's behavior in headless=False mode")
     print()
 
     return passed

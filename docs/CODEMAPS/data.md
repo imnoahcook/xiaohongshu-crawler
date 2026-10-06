@@ -1,4 +1,4 @@
-<!-- Generated: 2026-02-27 | Files scanned: 3 | Token estimate: ~700 -->
+<!-- Generated: 2026-10-06 | Files scanned: 3 | Token estimate: ~700 -->
 
 # Data Models & Storage — rednote-crawler
 
@@ -112,14 +112,12 @@ crawler:
   max_notes_per_keyword: 20
   max_comments_per_note: 20
   scroll_pause: 1.5
+  page_load_timeout: 30
 
 delay:
   between_notes: [2, 5]       # random range (seconds)
   between_searches: [3, 8]
   scroll_interval: [1, 3]
-
-browser:
-  headless: false
 
 storage:
   output_dir: "data"
@@ -129,7 +127,11 @@ storage:
 
 ## Persistent State
 
+The crawler persists no login state: the rednote login lives in the user's own Chrome profile, which the crawler attaches to over CDP.
+
 ```
-auth_state/state.json — Playwright storage_state (cookies + localStorage)
-                        Gitignored, auto-created on first login
+logs/daemon.pid      — pid of the background daemon (rednote.py start)
+logs/daemon.log      — daemon stdout/stderr
+logs/mcp_server.log  — rotating MCP server log
+                       All gitignored
 ```

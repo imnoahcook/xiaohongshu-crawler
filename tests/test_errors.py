@@ -82,14 +82,14 @@ class TestPredefinedErrors:
         err = browser_crashed_error()
         d = err.to_dict()
         assert d["code"] == "BROWSER_CRASHED"
-        assert "recover" in d["action"] or "Restart" in d["action"]
+        assert "restart" in d["action"]
 
     def test_login_expired_error(self):
         """The login-expired error should contain the correct code and login instructions."""
         err = login_expired_error()
         d = err.to_dict()
         assert d["code"] == "LOGIN_EXPIRED"
-        assert "verify_login" in d["action"]
+        assert "Log in" in d["action"]
 
     def test_timeout_error_with_tool_name(self):
         """The timeout error should contain the tool name and timeout duration."""

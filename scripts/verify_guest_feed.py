@@ -30,7 +30,7 @@ SAMPLE_SIZE = 5
 
 
 async def run() -> bool:
-    async with BrowserManager(headless=True) as bm:
+    async with BrowserManager() as bm:
         page = await bm.new_page()
         await page.goto(HOME_URL, wait_until="domcontentloaded", timeout=30_000)
         await page.wait_for_selector(CARD_SELECTOR, timeout=30_000)

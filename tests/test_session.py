@@ -26,16 +26,6 @@ class TestCrawlerSessionInitialState:
         session = CrawlerSession()
         assert session.is_running() is False
 
-    def test_default_headless_is_true(self):
-        """The MCP server uses headless mode by default."""
-        session = CrawlerSession()
-        assert session._headless is True
-
-    def test_custom_headless_false(self):
-        """headless=False can be set explicitly (for debugging)."""
-        session = CrawlerSession(headless=False)
-        assert session._headless is False
-
 
 class TestCrawlerSessionLifecycle:
     """Tests browser lifecycle management."""

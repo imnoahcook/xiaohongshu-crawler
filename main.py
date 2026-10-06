@@ -145,7 +145,6 @@ async def main() -> None:
 
     crawler_cfg: dict = config.get("crawler", {})
     delay_cfg: dict = config.get("delay", {})
-    browser_cfg: dict = config.get("browser", {})
     storage_cfg: dict = config.get("storage", {})
 
     keywords: list[str] = crawler_cfg.get("keywords", [])
@@ -154,7 +153,6 @@ async def main() -> None:
         sys.exit(1)
 
     between_searches = tuple(delay_cfg.get("between_searches", [3.0, 8.0]))
-    headless: bool = browser_cfg.get("headless", False)
 
     logger.info("rednote data crawler starting")
     logger.info("Keywords (%d): %s", len(keywords), keywords)
@@ -163,7 +161,7 @@ async def main() -> None:
     storage = Storage(storage_cfg)
 
     # Initialize the browser
-    async with BrowserManager(headless=headless) as bm:
+    async with BrowserManager() as bm:
         # Make sure the login state is ready
         logger.info("Checking login status...")
         logged_in = await ensure_logged_in(bm)

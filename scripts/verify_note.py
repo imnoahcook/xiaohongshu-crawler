@@ -16,7 +16,7 @@ Examples:
     uv run python scripts/verify_note.py "coffee"         # Specify a keyword
 
 Prerequisites:
-    - Login completed (auth_state/state.json exists)
+    - Login completed to rednote in your everyday Chrome
     - If not logged in, first run: uv run python scripts/verify_login.py
 """
 
@@ -62,15 +62,9 @@ async def run(keyword: str) -> bool:
     print(f"  Max comments per note: {VERIFY_MAX_COMMENTS}")
     print()
 
-    # ---- Step 1: Check the login state ----
-    auth_state = Path("auth_state/state.json")
-    if not auth_state.exists():
-        print("  ✗ Login state file not found, please run verify_login.py to log in first")
-        return False
-
     note_details: list[dict] = []
 
-    async with BrowserManager(headless=False) as bm:
+    async with BrowserManager() as bm:
         # ---- Step 2: Verify the login state ----
         print("[1/4] Verifying login state...")
         page = await bm.new_page()
@@ -166,7 +160,6 @@ async def run(keyword: str) -> bool:
         print("    1. The detail page DOM selectors are out of date (rednote page redesign)")
         print("    2. Page load timeout or network error")
         print("    3. A broken login state caused a redirect")
-        print("    Suggestion: inspect the page DOM structure manually in headless=False mode")
     print()
 
     return passed

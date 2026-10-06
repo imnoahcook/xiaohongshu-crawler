@@ -25,7 +25,7 @@ class TestMCPIntegrationSearchNotes:
     async def test_full_chain_returns_structured_result(self):
         """Full chain: mcp_server.search_notes → CrawlerSession.search_notes → src.search.search_notes."""
         mock_results = [{"note_id": "abc", "title": "Test note"}]
-        real_session = CrawlerSession(headless=True)
+        real_session = CrawlerSession()
 
         with patch("src.session.BrowserManager") as MockBM:
             with patch("src.search.search_notes", new=AsyncMock(return_value=mock_results)) as mock_search:
@@ -48,7 +48,7 @@ class TestMCPIntegrationSearchNotes:
 
     async def test_full_chain_input_validation_before_session(self):
         """An empty keyword is rejected before the session is called; the session is not started."""
-        real_session = CrawlerSession(headless=True)
+        real_session = CrawlerSession()
 
         with patch.object(mcp_server, "_session", real_session):
             result = await mcp_server.search_notes(keyword="")
@@ -58,7 +58,7 @@ class TestMCPIntegrationSearchNotes:
 
     async def test_full_chain_max_count_clamped_before_session(self):
         """max_count > 50 is clamped to 50 before reaching the session."""
-        real_session = CrawlerSession(headless=True)
+        real_session = CrawlerSession()
 
         with patch("src.session.BrowserManager") as MockBM:
             with patch("src.search.search_notes", new=AsyncMock(return_value=[])) as mock_search:
@@ -79,7 +79,7 @@ class TestMCPIntegrationSearchNotes:
 
     async def test_full_chain_keyword_stripped_before_session(self):
         """Leading/trailing whitespace is stripped from keyword before it reaches the session."""
-        real_session = CrawlerSession(headless=True)
+        real_session = CrawlerSession()
 
         with patch("src.session.BrowserManager") as MockBM:
             with patch("src.search.search_notes", new=AsyncMock(return_value=[])) as mock_search:
@@ -106,7 +106,7 @@ class TestMCPIntegrationGetNoteDetail:
         """Full chain: mcp_server.get_note_detail → CrawlerSession.get_note_detail → src.note.fetch_single_note."""
         mock_detail = {"note_id": "abc123", "title": "Test note", "comments": []}
         note_url = "https://www.rednote.com/explore/abc123?xsec_token=xyz"
-        real_session = CrawlerSession(headless=True)
+        real_session = CrawlerSession()
 
         with patch("src.session.BrowserManager") as MockBM:
             with patch("src.note.fetch_single_note", new=AsyncMock(return_value=mock_detail)) as mock_fetch:
@@ -128,7 +128,7 @@ class TestMCPIntegrationGetNoteDetail:
     async def test_full_chain_fetch_returns_none_becomes_error_dict(self):
         """When the crawl module returns None, the MCP tool should return an error dict (not pass None through)."""
         note_url = "https://www.rednote.com/explore/invalid"
-        real_session = CrawlerSession(headless=True)
+        real_session = CrawlerSession()
 
         with patch("src.session.BrowserManager") as MockBM:
             with patch("src.note.fetch_single_note", new=AsyncMock(return_value=None)):
@@ -151,7 +151,7 @@ class TestMCPIntegrationGetNoteDetail:
     async def test_full_chain_max_comments_clamped_before_session(self):
         """max_comments > 50 is clamped to 50 before reaching the session."""
         note_url = "https://www.rednote.com/explore/abc123"
-        real_session = CrawlerSession(headless=True)
+        real_session = CrawlerSession()
 
         with patch("src.session.BrowserManager") as MockBM:
             with patch("src.note.fetch_single_note", new=AsyncMock(return_value={})) as mock_fetch:
@@ -173,7 +173,7 @@ class TestMCPIntegrationGetNoteDetail:
     async def test_full_chain_max_comments_clamped_below_zero(self):
         """max_comments < 0 is clamped to 0 before reaching the session."""
         note_url = "https://www.rednote.com/explore/abc123"
-        real_session = CrawlerSession(headless=True)
+        real_session = CrawlerSession()
 
         with patch("src.session.BrowserManager") as MockBM:
             with patch("src.note.fetch_single_note", new=AsyncMock(return_value={})) as mock_fetch:
@@ -198,7 +198,7 @@ class TestMCPIntegrationLifespan:
 
     async def test_lifespan_starts_and_stops_real_session(self):
         """lifespan should start and stop a real CrawlerSession (not a mock)."""
-        real_session = CrawlerSession(headless=True)
+        real_session = CrawlerSession()
 
         with patch("src.session.BrowserManager") as MockBM:
             mock_bm = AsyncMock()
@@ -216,7 +216,7 @@ class TestMCPIntegrationLifespan:
 
     async def test_lifespan_cleans_up_bm_on_exception(self):
         """When an exception is raised inside lifespan, the session's internal state should be fully cleaned up."""
-        real_session = CrawlerSession(headless=True)
+        real_session = CrawlerSession()
 
         with patch("src.session.BrowserManager") as MockBM:
             mock_bm = AsyncMock()
@@ -241,7 +241,7 @@ class TestMCPIntegrationSessionNotRunning:
 
     async def test_search_notes_without_lifespan_returns_error(self):
         """When not started via lifespan, search_notes should gracefully return an error dict rather than crash."""
-        real_session = CrawlerSession(headless=True)
+        real_session = CrawlerSession()
         assert real_session.is_running() is False
 
         with patch.object(mcp_server, "_session", real_session):
@@ -252,7 +252,7 @@ class TestMCPIntegrationSessionNotRunning:
 
     async def test_get_note_detail_without_lifespan_returns_error(self):
         """When not started via lifespan, get_note_detail should gracefully return an error dict rather than crash."""
-        real_session = CrawlerSession(headless=True)
+        real_session = CrawlerSession()
 
         with patch.object(mcp_server, "_session", real_session):
             result = await mcp_server.get_note_detail(
@@ -264,7 +264,7 @@ class TestMCPIntegrationSessionNotRunning:
 
     async def test_check_login_status_without_lifespan_returns_not_running(self):
         """When not started via lifespan, check_login_status should return browser_running=False."""
-        real_session = CrawlerSession(headless=True)
+        real_session = CrawlerSession()
 
         with patch.object(mcp_server, "_session", real_session):
             result = await mcp_server.check_login_status()
@@ -274,7 +274,7 @@ class TestMCPIntegrationSessionNotRunning:
 
     async def test_search_notes_not_running_returns_structured_error(self):
         """A structured error should be returned when the browser is not running (Phase D: includes code/action)."""
-        real_session = CrawlerSession(headless=True)
+        real_session = CrawlerSession()
 
         with patch.object(mcp_server, "_session", real_session):
             result = await mcp_server.search_notes(keyword="test")

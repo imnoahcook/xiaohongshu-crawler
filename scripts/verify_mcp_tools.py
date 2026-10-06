@@ -17,7 +17,7 @@ Examples:
     uv run python scripts/verify_mcp_tools.py "Python tutorial" # use a specific keyword
 
 Prerequisites:
-    - Already logged in (auth_state/state.json exists)
+    - Already logged in to rednote in your everyday Chrome
     - If not logged in, first run: uv run python scripts/verify_login.py
 """
 
@@ -67,14 +67,8 @@ async def run(keyword: str) -> bool:
     print(f"  Search count: {VERIFY_MAX_COUNT}, comment count: {VERIFY_MAX_COMMENTS}")
     print()
 
-    # ---- Check the login state file ----
-    auth_state = Path("auth_state/state.json")
-    if not auth_state.exists():
-        print("  ✗ Login state file not found; run verify_login.py to log in first")
-        return False
-
     passed = True
-    session = CrawlerSession(headless=False)
+    session = CrawlerSession()
 
     # Replace the module-level _session so the mcp_server tool functions use the local session
     original_session = mcp_server._session
@@ -219,7 +213,6 @@ async def run(keyword: str) -> bool:
     else:
         print("  ✗ Phase B MCP tool verification failed")
         print("  Check the detailed output above for the failed items")
-        print("  Tip: run with headless=False to watch the browser")
     print()
 
     return passed

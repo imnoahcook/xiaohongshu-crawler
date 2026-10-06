@@ -34,7 +34,7 @@ Configuring Claude Desktop / Code:
 
 Notes:
   In MCP stdio mode stdout is reserved for the protocol, so logs must go to stderr.
-  Before first use, run `uv run python scripts/verify_login.py` to log in.
+  The server works in the Chrome you already have open; log in to rednote.com there first.
 """
 
 from __future__ import annotations
@@ -115,7 +115,13 @@ def setup_file_logging(
 
 
 # ---- Global session singleton (lives for the lifetime of the MCP process) ----
-_session = CrawlerSession(headless=True)
+_session = CrawlerSession()
+
+# Over the HTTP transports this lifespan runs once per client connection, not once
+# per process. Detaching after each client would make Chrome ask to allow remote
+# debugging again on the next one, so there the session stays attached until the
+# process exits. main() sets this for the HTTP transports.
+_stay_attached = False
 
 
 @asynccontextmanager
@@ -133,9 +139,10 @@ async def lifespan(server: FastMCP) -> AsyncGenerator[None, None]:
     try:
         yield
     finally:
-        logger.info("rednote-crawler MCP server shutting down...")
-        await _session.stop()
-        logger.info("rednote-crawler MCP server stopped")
+        if not _stay_attached:
+            logger.info("rednote-crawler MCP server shutting down...")
+            await _session.stop()
+            logger.info("rednote-crawler MCP server stopped")
 
 
 # ---- Create the MCP server instance ----
@@ -175,8 +182,7 @@ async def check_login_status() -> dict:
     """Check the rednote login status.
 
     Returns whether the browser is running and whether it is logged in.
-    If not logged in, first run `uv run python scripts/verify_login.py` to log in by QR code,
-    then restart this MCP server.
+    If not logged in, log in to rednote.com in Chrome (QR code or phone number) and retry.
 
     Expected duration: 5-10 seconds (visits the rednote home page)
 
@@ -433,6 +439,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 def main() -> None:
     """MCP server entry point: parse arguments and start the selected transport."""
+    global _stay_attached
     args = parse_args()
 
     if args.transport == "stdio":
@@ -443,6 +450,7 @@ def main() -> None:
         # SSE / Streamable HTTP mode: update the listen address, then start
         mcp.settings.host = args.host
         mcp.settings.port = args.port
+        _stay_attached = True
         logger.info(
             "Starting MCP server in %s mode (%s:%d)",
             args.transport, args.host, args.port,

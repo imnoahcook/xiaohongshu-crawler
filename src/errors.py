@@ -61,8 +61,8 @@ def browser_not_running_error() -> CrawlerError:
     """Error for when the browser is not running."""
     return CrawlerError(
         code="BROWSER_NOT_RUNNING",
-        message="Browser is not running. Make sure the MCP server is running, then retry.",
-        action="Restart the MCP server, or check that Playwright is installed correctly.",
+        message="Not connected to Chrome. Make sure Chrome is running, then retry.",
+        action="Restart the MCP server, and check that remote debugging is allowed at chrome://inspect/#remote-debugging.",
     )
 
 
@@ -70,8 +70,8 @@ def browser_crashed_error() -> CrawlerError:
     """Error for when the browser crashed and automatic recovery failed."""
     return CrawlerError(
         code="BROWSER_CRASHED",
-        message="Browser crashed and automatic recovery failed.",
-        action="Restart the MCP server to recover the browser.",
+        message="The connection to Chrome was lost and reconnecting failed.",
+        action="Make sure Chrome is running, then restart the MCP server to reconnect.",
     )
 
 
@@ -81,8 +81,8 @@ def login_expired_error() -> CrawlerError:
         code="LOGIN_EXPIRED",
         message="rednote login has expired; you need to log in again.",
         action=(
-            "Run `uv run python scripts/verify_login.py` in a terminal "
-            "to log in by scanning the QR code, then restart the MCP server."
+            "Log in to rednote.com in your Chrome (QR code or phone number), "
+            "then retry."
         ),
     )
 
