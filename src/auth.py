@@ -136,6 +136,9 @@ async def ensure_logged_in(bm: BrowserManager) -> bool:
             return True
 
         # Not logged in; guide a manual login
-        return await wait_for_manual_login(page)
+        if not await wait_for_manual_login(page):
+            return False
+        await bm.save_state()
+        return True
     finally:
         await page.close()

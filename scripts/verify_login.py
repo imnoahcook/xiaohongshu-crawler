@@ -40,6 +40,7 @@ async def run() -> None:
         if await is_logged_in(page):
             print("\n  ✓ Already logged in; no need to log in again")
         elif await wait_for_manual_login(page):
+            await bm.save_state()
             print("\n  ✓ Login succeeded")
             print("    It will be reused automatically on the next run; no need to log in again")
         else:

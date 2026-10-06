@@ -41,8 +41,10 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import json
 import logging
 import sys
+import time
 from contextlib import asynccontextmanager
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
@@ -50,6 +52,7 @@ from typing import AsyncGenerator
 
 from mcp.server.fastmcp import FastMCP
 
+from export_job import ExportJob, configure_file_log
 from src.errors import invalid_input_error, timeout_error
 from src.session import CrawlerSession
 
@@ -147,6 +150,93 @@ async def lifespan(server: FastMCP) -> AsyncGenerator[None, None]:
 
 # ---- Create the MCP server instance ----
 mcp = FastMCP("rednote-crawler", lifespan=lifespan)
+
+
+# ============================================================
+# Bulk export (long-running background job)
+# ============================================================
+
+# The export currently running in this process, if any
+_export: dict = {"task": None, "out_dir": None, "started_at": None, "result": None}
+
+
+async def _run_export(job: ExportJob, limit_notes: int | None) -> None:
+    try:
+        async with _session.browser_lock() as bm:
+            pass
+        if bm is None:
+            _export["result"] = "failed: not connected to Chrome"
+            return
+        # The job works in its own tab, so the lock is not held while it runs
+        finished = await job.run_in(bm, limit_notes)
+        _export["result"] = "finished" if finished else "stopped early; start it again to resume"
+    except Exception as e:
+        logger.exception("Export job crashed")
+        _export["result"] = f"failed: {type(e).__name__}: {e}"
+
+
+@mcp.tool()
+async def start_export(plan_path: str, out_dir: str, phase: int = 0, limit_notes: int = 0) -> dict:
+    """Start a bulk export job in the background (see export_job.py for the plan format).
+
+    Runs every search query in the plan, then saves each distinct note (caption, tags,
+    counts, publish date, top comments, image slides) under out_dir. Resumable: starting
+    it again with the same arguments skips what is already done.
+
+    Args:
+        plan_path: Path to the plan JSON file
+        out_dir: Folder to write queries.json, notes.jsonl and images/ into
+        phase: Only run plan categories with this phase (0 = all)
+        limit_notes: Fetch at most this many notes (0 = no limit)
+
+    Returns:
+        started (bool) and a message; poll export_status for progress
+    """
+    task = _export["task"]
+    if task is not None and not task.done():
+        return {"started": False, "message": f"An export is already running into {_export['out_dir']}"}
+
+    plan_file = Path(plan_path).expanduser()
+    if not plan_file.exists():
+        return invalid_input_error("plan_path", f"file not found: {plan_file}").to_dict()
+
+    target = Path(out_dir).expanduser()
+    configure_file_log(target)
+    job = ExportJob(json.loads(plan_file.read_text()), target, phase or None)
+    _export.update(
+        task=asyncio.create_task(_run_export(job, limit_notes or None)),
+        out_dir=str(target),
+        started_at=time.strftime("%Y-%m-%d %H:%M:%S"),
+        result=None,
+    )
+    return {"started": True, "message": f"Export started; progress is logged to {target / 'crawl.log'}"}
+
+
+@mcp.tool()
+async def export_status() -> dict:
+    """Report the progress of the bulk export job started with start_export.
+
+    Returns:
+        running (bool), result (set once it has ended), counts of finished queries
+        and saved notes, and the last log lines
+    """
+    if _export["out_dir"] is None:
+        return {"running": False, "message": "No export has been started in this server process."}
+
+    target = Path(_export["out_dir"])
+    queries = json.loads((target / "queries.json").read_text()) if (target / "queries.json").exists() else []
+    notes_file = target / "notes.jsonl"
+    log_file = target / "crawl.log"
+    return {
+        "running": not _export["task"].done(),
+        "result": _export["result"],
+        "started_at": _export["started_at"],
+        "out_dir": str(target),
+        "queries_done": len(queries),
+        "query_errors": [f"{q['query']} ({q['sort']}): {q['error']}" for q in queries if q.get("error")],
+        "notes_saved": sum(1 for _ in notes_file.open()) if notes_file.exists() else 0,
+        "log_tail": log_file.read_text().splitlines()[-8:] if log_file.exists() else [],
+    }
 
 
 # ============================================================

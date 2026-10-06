@@ -114,10 +114,10 @@ def start() -> int:
             start_new_session=True,
         )
     PID_FILE.write_text(str(process.pid))
-    print('Starting daemon; click "Allow" on the remote debugging prompt in Chrome...')
+    print("Starting daemon...")
 
     if asyncio.run(_wait_until_ready(process)):
-        print(f"Daemon attached to Chrome (pid {process.pid}, log: {LOG_FILE})")
+        print(f"Daemon ready (pid {process.pid}, log: {LOG_FILE})")
         return 0
 
     print(f"Daemon failed to start; see {LOG_FILE}")
@@ -145,6 +145,8 @@ _TOOLS = {
     "note": "get_note_detail",
     "crawl": "crawl_keyword",
     "saved": "get_saved_data",
+    "export": "start_export",
+    "export-status": "export_status",
 }
 
 
@@ -172,6 +174,13 @@ def _parse_args() -> argparse.Namespace:
     saved = commands.add_parser("saved", help="list saved data files")
     saved.add_argument("keyword", nargs="?", default="")
 
+    export = commands.add_parser("export", help="start a bulk export job (see export_job.py)")
+    export.add_argument("plan_path")
+    export.add_argument("out_dir")
+    export.add_argument("--phase", type=int, default=0)
+    export.add_argument("--limit-notes", type=int, default=0)
+    commands.add_parser("export-status", help="show the export job's progress")
+
     return parser.parse_args()
 
 
@@ -188,6 +197,10 @@ def main() -> int:
 
     # The remaining arguments are named after the tool's parameters
     arguments = {key: value for key, value in vars(args).items() if key != "command"}
+    for key in ("plan_path", "out_dir"):
+        if key in arguments:
+            # The daemon runs in its own working directory
+            arguments[key] = str(Path(arguments[key]).expanduser().resolve())
     result = asyncio.run(_call(_TOOLS[args.command], arguments))
     print(json.dumps(result, ensure_ascii=False, indent=2))
     return 1 if result.get("error") else 0

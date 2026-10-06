@@ -19,3 +19,6 @@ logs/
 # Test coverage
 .coverage
 
+
+# Saved login of the stealth browser
+auth_state/
